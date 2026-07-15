@@ -18,8 +18,8 @@ const robotoMono = Roboto_Mono({
 });
 
 export const metadata = {
-  title: "Match Day — Football Tournament Scorer",
-  description: "Live football scoring and tournament standings tracker.",
+  title: "FORCEPLUS — Tournament Scorer",
+  description: "Live scoring and tournament standings tracker.",
 };
 
 export const viewport = {

@@ -226,7 +226,7 @@ export default function PublicHome() {
           </div>
 
           <h1 className="text-4xl sm:text-5xl md:text-7xl font-display uppercase tracking-normal text-white drop-shadow-lg">
-            Match Day
+            FORCEPLUS
           </h1>
           <p className="text-sm sm:text-base md:text-lg text-white/85 font-medium max-w-xl leading-relaxed">
             Follow live scores, fixtures, points tables, and top scorers.
@@ -251,7 +251,7 @@ export default function PublicHome() {
               No tournaments yet
             </h3>
             <p className="text-xs text-deep-forest/60 max-w-sm leading-relaxed">
-              Check back when Match Day kicks off.
+              Check back when tournament kicks off.
             </p>
           </div>
         ) : (

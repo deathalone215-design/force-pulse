@@ -831,7 +831,7 @@ export default function TournamentDashboard() {
               ) : null}
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-1.5 text-mustard-gold font-mono text-[9px] sm:text-[10px] font-bold uppercase tracking-wide sm:tracking-widest">
-                  <span>Match Day</span>
+                  <span>FORCEPLUS</span>
                   <span>•</span>
                   <span>
                     {isCricket
