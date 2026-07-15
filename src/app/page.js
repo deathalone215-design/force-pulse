@@ -11,7 +11,6 @@ import {
   Tags,
   Radio,
   Activity,
-  Clock,
 } from "lucide-react";
 import {
   hasTournamentDayStarted,
@@ -32,8 +31,6 @@ function TournamentCard({ t, mode }) {
   const isLive = mode === "live";
   const isReady = mode === "ready";
   const isUpcoming = mode === "upcoming";
-  // Always openable: preview clubs/schedule before match day; live board after.
-  const canOpen = true;
 
   const footerLabel = isLive ? (
     <>

@@ -833,7 +833,7 @@ export default function PublicLiveBoard() {
                 <p className="text-xs font-mono text-deep-forest/50">No clubs registered yet</p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-3 max-w-2xl mx-auto w-full">
                 {categoryClubs.map((club) => {
                   const open = expandedClubId === club.id;
                   const players = [...(club.players || [])].sort(
