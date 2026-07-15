@@ -557,8 +557,6 @@ export default function PublicLiveBoard() {
 
   useEffect(() => {
     fetchData();
-    const timer = setInterval(fetchData, 3000);
-    return () => clearInterval(timer);
   }, [fetchData]);
 
   if (loading) {
@@ -917,11 +915,7 @@ export default function PublicLiveBoard() {
               <h2 className="text-xs font-mono font-bold uppercase tracking-widest text-deep-forest/60">
                 Match Centre — {activeCategory?.name}
               </h2>
-              {dayStarted ? (
-                <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-0.5">
-                  Auto-refresh 3s
-                </span>
-              ) : (
+              {!dayStarted && (
                 <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-deep-forest/55 bg-cream-bg border border-slate-200 rounded-md px-2 py-0.5">
                   Live from {formatTournamentDate(tournament.startDate)}
                 </span>
@@ -1293,10 +1287,6 @@ export default function PublicLiveBoard() {
           </section>
         )}
       </main>
-
-      <footer className="border-t border-slate-200 bg-white py-6 text-center text-[10px] font-mono text-slate-400 tracking-wider">
-        Auto-refreshes every 3s · Spectators view only
-      </footer>
     </div>
   );
 }
