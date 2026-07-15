@@ -5,13 +5,24 @@ import pg from 'pg';
 const globalForPrisma = global;
 
 const getPrismaClient = () => {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("DATABASE_URL is not set");
+  }
   const pool = new pg.Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString,
+    // PgBouncer transaction mode: avoid sticky stale sessions
+    max: 5,
+    idleTimeoutMillis: 10_000,
   });
   const adapter = new PrismaPg(pool);
   return new PrismaClient({ adapter });
 };
 
-export const prisma = globalForPrisma.prisma || getPrismaClient();
+const g = globalForPrisma;
+if (!g.prisma || g.__prismaUrl !== process.env.DATABASE_URL) {
+  g.prisma = getPrismaClient();
+  g.__prismaUrl = process.env.DATABASE_URL;
+}
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+export const prisma = g.prisma;

@@ -45,3 +45,28 @@ export async function PATCH(request, { params }) {
     return NextResponse.json({ error: "Failed to update player" }, { status: 500 });
   }
 }
+
+export async function DELETE(request, { params }) {
+  try {
+    const { id: tournamentId, teamId, playerId } = await params;
+
+    const player = await prisma.player.findFirst({
+      where: {
+        id: playerId,
+        teamId,
+        team: { category: { tournamentId } },
+      },
+    });
+
+    if (!player) {
+      return NextResponse.json({ error: "Player not found" }, { status: 404 });
+    }
+
+    await prisma.player.delete({ where: { id: playerId } });
+
+    return NextResponse.json({ message: "Player deleted" });
+  } catch (error) {
+    console.error("Failed to delete player:", error);
+    return NextResponse.json({ error: "Failed to delete player" }, { status: 500 });
+  }
+}

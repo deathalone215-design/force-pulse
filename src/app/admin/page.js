@@ -1031,7 +1031,7 @@ export default function AdminHome() {
       )}
 
       <footer className="border-t border-slate-200 bg-white py-8 text-center text-[10px] font-mono text-slate-400 tracking-wider">
-        <p>© 2026 MATCH DAY SCORER • POWERED BY GEMINI DEVELOPER AGENT</p>
+        <p>© 2026 FORCEPLUS • POWERED BY GEMINI DEVELOPER AGENT</p>
       </footer>
     </div>
   );

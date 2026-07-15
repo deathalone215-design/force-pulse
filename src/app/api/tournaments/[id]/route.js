@@ -11,7 +11,11 @@ export async function GET(request, { params }) {
       return NextResponse.json({ error: "Tournament not found" }, { status: 404 });
     }
 
-    return NextResponse.json(tournament);
+    return NextResponse.json(tournament, {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+      },
+    });
   } catch (error) {
     console.error("Failed to fetch tournament:", error);
     return NextResponse.json({ error: "Failed to fetch tournament" }, { status: 500 });

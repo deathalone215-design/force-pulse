@@ -74,13 +74,17 @@ export default function TournamentDashboard() {
   const [addingTeam, setAddingTeam] = useState(false);
   const teamLogoInputRef = useRef(null);
 
-  // Edit existing club (logo + add players)
+  // Edit existing club (name, logo + add players)
   const [editingTeamId, setEditingTeamId] = useState(null);
+  const [editTeamName, setEditTeamName] = useState("");
   const [editTeamLogoUrl, setEditTeamLogoUrl] = useState(null);
   const [editPlayerName, setEditPlayerName] = useState("");
   const [editPlayerShirt, setEditPlayerShirt] = useState("");
   const [editPlayerLogoUrl, setEditPlayerLogoUrl] = useState(null);
   const [savingTeamEdit, setSavingTeamEdit] = useState(false);
+  const [editingPlayerId, setEditingPlayerId] = useState(null);
+  const [editExistingPlayerName, setEditExistingPlayerName] = useState("");
+  const [editExistingPlayerShirt, setEditExistingPlayerShirt] = useState("");
   const editTeamLogoInputRef = useRef(null);
   const editPlayerLogoInputRef = useRef(null);
 
@@ -96,7 +100,29 @@ export default function TournamentDashboard() {
         return;
       }
       const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
+      reader.onload = () => {
+        const raw = reader.result;
+        // Shrink large photos so club/player logos fit Vercel request limits
+        const img = new Image();
+        img.onload = () => {
+          const maxSide = 512;
+          const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+          const w = Math.max(1, Math.round(img.width * scale));
+          const h = Math.max(1, Math.round(img.height * scale));
+          const canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            resolve(raw);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL("image/jpeg", 0.82));
+        };
+        img.onerror = () => resolve(raw);
+        img.src = raw;
+      };
       reader.onerror = () => reject(new Error("Failed to read image"));
       reader.readAsDataURL(file);
     });
@@ -178,7 +204,7 @@ export default function TournamentDashboard() {
   const fetchTournamentDetails = async ({ silent = false } = {}) => {
     try {
       if (!silent) setLoading(true);
-      const res = await fetch(`/api/tournaments/${id}`);
+      const res = await fetch(`/api/tournaments/${id}`, { cache: "no-store" });
       if (!res.ok) throw new Error("Tournament not found");
       const data = await res.json();
       setTournament(data);
@@ -230,29 +256,49 @@ export default function TournamentDashboard() {
   // Add Team Submission
   const handleAddTeam = async (e) => {
     e.preventDefault();
-    if (!newTeamName.trim()) return;
+    if (!newTeamName.trim()) {
+      alert("Enter a club / team name");
+      return;
+    }
+    if (!activeCategoryId) {
+      alert("Select a category (e.g. OPEN or U15) first");
+      return;
+    }
 
     try {
       setAddingTeam(true);
-      const squad = newPlayers.filter(p => p.name.trim() !== "");
+      const squad = newPlayers.filter((p) => p.name.trim() !== "");
       const res = await fetch(`/api/tournaments/${id}/teams`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
-          name: newTeamName,
+          name: newTeamName.trim(),
           logoUrl: newTeamLogoUrl || null,
-          players: squad,
+          players: squad.map((p) => ({
+            name: p.name.trim(),
+            shirtNumber: p.shirtNumber,
+            logoUrl: p.logoUrl || null,
+          })),
           categoryId: activeCategoryId,
         }),
       });
 
-      if (!res.ok) throw new Error("Failed to add team");
-      
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to register club");
+      }
+
       setNewTeamName("");
       setNewTeamLogoUrl(null);
       if (teamLogoInputRef.current) teamLogoInputRef.current.value = "";
       setNewPlayers([{ name: "", shirtNumber: "", logoUrl: null }]);
       await fetchTournamentDetails({ silent: true });
+      alert(
+        squad.length
+          ? `Club registered with ${squad.length} player${squad.length === 1 ? "" : "s"}.`
+          : "Club registered. You can add players anytime via Edit."
+      );
     } catch (err) {
       alert(err.message);
     } finally {
@@ -285,20 +331,28 @@ export default function TournamentDashboard() {
 
   const openTeamEditor = (team) => {
     setEditingTeamId(team.id);
+    setEditTeamName(team.name || "");
     setEditTeamLogoUrl(team.logoUrl || null);
     setEditPlayerName("");
     setEditPlayerShirt("");
     setEditPlayerLogoUrl(null);
+    setEditingPlayerId(null);
+    setEditExistingPlayerName("");
+    setEditExistingPlayerShirt("");
     if (editTeamLogoInputRef.current) editTeamLogoInputRef.current.value = "";
     if (editPlayerLogoInputRef.current) editPlayerLogoInputRef.current.value = "";
   };
 
   const closeTeamEditor = () => {
     setEditingTeamId(null);
+    setEditTeamName("");
     setEditTeamLogoUrl(null);
     setEditPlayerName("");
     setEditPlayerShirt("");
     setEditPlayerLogoUrl(null);
+    setEditingPlayerId(null);
+    setEditExistingPlayerName("");
+    setEditExistingPlayerShirt("");
     if (editTeamLogoInputRef.current) editTeamLogoInputRef.current.value = "";
     if (editPlayerLogoInputRef.current) editPlayerLogoInputRef.current.value = "";
   };
@@ -353,6 +407,83 @@ export default function TournamentDashboard() {
     }
   };
 
+  const startEditPlayer = (player) => {
+    setEditingPlayerId(player.id);
+    setEditExistingPlayerName(player.name || "");
+    setEditExistingPlayerShirt(
+      player.shirtNumber === 0 || player.shirtNumber
+        ? String(player.shirtNumber)
+        : ""
+    );
+  };
+
+  const cancelEditPlayer = () => {
+    setEditingPlayerId(null);
+    setEditExistingPlayerName("");
+    setEditExistingPlayerShirt("");
+  };
+
+  const handleSavePlayer = async (teamId, playerId) => {
+    const trimmed = editExistingPlayerName.trim();
+    if (!trimmed) {
+      alert("Player name is required");
+      return;
+    }
+    try {
+      setSavingTeamEdit(true);
+      const res = await fetch(
+        `/api/tournaments/${id}/teams/${teamId}/players/${playerId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            name: trimmed,
+            shirtNumber: parseInt(editExistingPlayerShirt, 10) || 0,
+          }),
+        }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to update player");
+      }
+      cancelEditPlayer();
+      await fetchTournamentDetails({ silent: true });
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSavingTeamEdit(false);
+    }
+  };
+
+  const handleDeletePlayer = async (teamId, player) => {
+    const ok = window.confirm(
+      `Remove "${player.name}" (#${player.shirtNumber}) from this club?`
+    );
+    if (!ok) return;
+
+    try {
+      setSavingTeamEdit(true);
+      const res = await fetch(
+        `/api/tournaments/${id}/teams/${teamId}/players/${player.id}`,
+        {
+          method: "DELETE",
+          credentials: "include",
+        }
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to delete player");
+      }
+      if (editingPlayerId === player.id) cancelEditPlayer();
+      await fetchTournamentDetails({ silent: true });
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSavingTeamEdit(false);
+    }
+  };
+
   const handleSaveTeamLogo = async (teamId) => {
     try {
       setSavingTeamEdit(true);
@@ -368,6 +499,58 @@ export default function TournamentDashboard() {
       }
       await fetchTournamentDetails({ silent: true });
       alert("Club logo updated — it will show on the public live board.");
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSavingTeamEdit(false);
+    }
+  };
+
+  const handleSaveTeamName = async (teamId) => {
+    const trimmed = editTeamName.trim();
+    if (!trimmed) {
+      alert("Enter a club / team name");
+      return;
+    }
+    try {
+      setSavingTeamEdit(true);
+      const res = await fetch(`/api/tournaments/${id}/teams/${teamId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name: trimmed }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to update team name");
+      }
+      await fetchTournamentDetails({ silent: true });
+      alert("Club name updated.");
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSavingTeamEdit(false);
+    }
+  };
+
+  const handleDeleteTeam = async (team) => {
+    const ok = window.confirm(
+      `Delete "${team.name}"?\n\nThis removes the club, its players, and any matches that include this team. This cannot be undone.`
+    );
+    if (!ok) return;
+
+    try {
+      setSavingTeamEdit(true);
+      const res = await fetch(`/api/tournaments/${id}/teams/${team.id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Failed to delete team");
+      }
+      closeTeamEditor();
+      await fetchTournamentDetails({ silent: true });
     } catch (err) {
       alert(err.message);
     } finally {
@@ -1194,18 +1377,22 @@ export default function TournamentDashboard() {
             {/* Team Creation Form */}
             <div className="lg:col-span-1">
               <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl p-6 shadow-sm relative overflow-hidden">
-                <div className="flex items-center gap-2 mb-6 border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2 mb-2 border-b border-slate-100 pb-3">
                   <Users className="w-5 h-5 text-mustard-gold" />
                   <h3 className="text-sm font-bold text-deep-forest uppercase tracking-wider font-mono">Register Club</h3>
                 </div>
+                <p className="text-[10px] font-mono text-deep-forest/50 mb-6 leading-relaxed">
+                  Add club name, optional logo, then players with jersey numbers and photos.
+                  Category: <span className="font-bold text-deep-forest">{activeCategory?.name || "—"}</span>
+                </p>
 
                 <form onSubmit={handleAddTeam} className="space-y-6">
                   <div>
-                    <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold">Club/Team Name</label>
+                    <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold">Club / Team Name</label>
                     <input
                       type="text"
                       required
-                      placeholder="e.g. Manchester Red"
+                      placeholder="e.g. Spring Leaf United"
                       value={newTeamName}
                       onChange={(e) => setNewTeamName(e.target.value)}
                       className="w-full bg-[#FAF6EE]/50 border border-slate-200 focus:bg-white focus:border-mustard-gold focus:ring-1 focus:ring-mustard-gold rounded-xl px-4 py-2.5 text-sm text-deep-forest placeholder-slate-400 outline-none transition-all shadow-inner"
@@ -1214,7 +1401,7 @@ export default function TournamentDashboard() {
 
                   <div>
                     <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold">
-                      Club Logo (shown on public live board)
+                      Upload Club Logo
                     </label>
                     <div className="flex items-center gap-3">
                       {newTeamLogoUrl ? (
@@ -1254,7 +1441,9 @@ export default function TournamentDashboard() {
 
                   <div className="space-y-4">
                     <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                      <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest font-bold">Roster Squad</label>
+                      <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest font-bold">
+                        Add Players
+                      </label>
                       <button
                         type="button"
                         onClick={addPlayerRow}
@@ -1263,6 +1452,9 @@ export default function TournamentDashboard() {
                         <PlusCircle className="w-3.5 h-3.5" /> Add Player
                       </button>
                     </div>
+                    <p className="text-[9px] font-mono text-deep-forest/45">
+                      Tap the circle for a player photo · enter name & jersey #
+                    </p>
 
                     <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
                       {newPlayers.map((player, idx) => (
@@ -1417,6 +1609,34 @@ export default function TournamentDashboard() {
 
                       {isEditing && (
                         <div className="space-y-4 mb-4 pb-4 border-b border-dashed border-mustard-gold/40">
+                          {/* Edit club name */}
+                          <div>
+                            <p className="text-[9px] font-mono font-bold uppercase tracking-widest text-deep-forest/55 mb-2">
+                              Club / team name
+                            </p>
+                            <div className="flex flex-col sm:flex-row gap-2">
+                              <input
+                                type="text"
+                                value={editTeamName}
+                                onChange={(e) => setEditTeamName(e.target.value)}
+                                placeholder="Club name"
+                                className="flex-1 bg-[#FAF6EE]/50 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-3 py-2.5 text-xs outline-none"
+                              />
+                              <button
+                                type="button"
+                                disabled={
+                                  savingTeamEdit ||
+                                  editTeamName.trim() === "" ||
+                                  editTeamName.trim() === team.name
+                                }
+                                onClick={() => handleSaveTeamName(team.id)}
+                                className="px-3 py-2.5 bg-[#0d472c] text-white rounded-xl text-[9px] font-mono font-bold uppercase cursor-pointer disabled:opacity-40 min-h-[40px]"
+                              >
+                                Save name
+                              </button>
+                            </div>
+                          </div>
+
                           {/* Upload / change photo */}
                           <div>
                             <p className="text-[9px] font-mono font-bold uppercase tracking-widest text-deep-forest/55 mb-2">
@@ -1539,14 +1759,36 @@ export default function TournamentDashboard() {
                               </div>
                             </div>
                           </div>
+
+                          {/* Delete club */}
+                          <div className="pt-2 border-t border-dashed border-red-200">
+                            <p className="text-[9px] font-mono font-bold uppercase tracking-widest text-red-600/70 mb-2">
+                              Danger zone
+                            </p>
+                            <button
+                              type="button"
+                              disabled={savingTeamEdit}
+                              onClick={() => handleDeleteTeam(team)}
+                              className="inline-flex items-center gap-1.5 px-3 py-2.5 bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 rounded-xl text-[9px] font-mono font-bold uppercase cursor-pointer disabled:opacity-50 min-h-[40px]"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              Delete club
+                            </button>
+                            <p className="mt-1.5 text-[10px] font-mono text-deep-forest/45 leading-snug">
+                              Removes this club, its players, and any matches that include it.
+                            </p>
+                          </div>
                         </div>
                       )}
 
-                      <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                      <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
                         {team.players && team.players.length > 0 ? (
-                          team.players.map((p) => (
-                            <div key={p.id} className="flex justify-between items-center gap-2 text-xs font-mono text-[#3f6b55] bg-[#fcf7ed] border border-transparent hover:border-slate-200 rounded-lg px-3 py-2 transition-all">
-                              <div className="flex items-center gap-2 min-w-0">
+                          team.players.map((p) => {
+                            const isEditingPlayer = isEditing && editingPlayerId === p.id;
+                            return (
+                            <div key={p.id} className="flex flex-col gap-2 text-xs font-mono text-[#3f6b55] bg-[#fcf7ed] border border-transparent hover:border-slate-200 rounded-lg px-3 py-2 transition-all">
+                              <div className="flex justify-between items-center gap-2">
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
                                 {isEditing ? (
                                   <label className="shrink-0 cursor-pointer" title="Upload player photo">
                                     {p.logoUrl ? (
@@ -1579,14 +1821,80 @@ export default function TournamentDashboard() {
                                     {p.name.slice(0, 1).toUpperCase()}
                                   </div>
                                 )}
-                                <span className="truncate font-sans font-bold">{p.name}</span>
+                                {isEditingPlayer ? (
+                                  <div className="flex flex-1 items-center gap-1.5 min-w-0">
+                                    <input
+                                      type="text"
+                                      value={editExistingPlayerName}
+                                      onChange={(e) => setEditExistingPlayerName(e.target.value)}
+                                      className="flex-1 min-w-0 bg-white border border-mustard-gold/50 rounded-lg px-2 py-1.5 text-xs font-sans font-bold outline-none"
+                                      placeholder="Player name"
+                                    />
+                                    <input
+                                      type="number"
+                                      value={editExistingPlayerShirt}
+                                      onChange={(e) => setEditExistingPlayerShirt(e.target.value)}
+                                      className="w-14 bg-white border border-mustard-gold/50 rounded-lg px-1.5 py-1.5 text-xs text-center outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                      placeholder="No."
+                                    />
+                                  </div>
+                                ) : (
+                                  <span className="truncate font-sans font-bold">{p.name}</span>
+                                )}
                               </div>
-                              <div className="flex items-center gap-1 text-[9px] font-bold text-deep-forest bg-mustard-gold/15 border border-mustard-gold/30 rounded px-1.5 py-0.5 shrink-0">
-                                <span>No.</span>
-                                <span>{p.shirtNumber}</span>
+                              {isEditingPlayer ? (
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    type="button"
+                                    disabled={savingTeamEdit}
+                                    onClick={() => handleSavePlayer(team.id, p.id)}
+                                    className="px-2 py-1.5 bg-[#0d472c] text-white rounded-lg text-[9px] font-mono font-bold uppercase cursor-pointer disabled:opacity-50"
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={savingTeamEdit}
+                                    onClick={cancelEditPlayer}
+                                    className="px-2 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-[9px] font-mono font-bold uppercase cursor-pointer"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <div className="flex items-center gap-1 text-[9px] font-bold text-deep-forest bg-mustard-gold/15 border border-mustard-gold/30 rounded px-1.5 py-0.5">
+                                    <span>No.</span>
+                                    <span>{p.shirtNumber}</span>
+                                  </div>
+                                  {isEditing && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        disabled={savingTeamEdit}
+                                        onClick={() => startEditPlayer(p)}
+                                        title="Edit player"
+                                        className="p-1.5 rounded-lg border border-slate-200 bg-white text-deep-forest hover:bg-mustard-gold/20 cursor-pointer disabled:opacity-50"
+                                      >
+                                        <Pencil className="w-3 h-3" />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        disabled={savingTeamEdit}
+                                        onClick={() => handleDeletePlayer(team.id, p)}
+                                        title="Delete player"
+                                        className="p-1.5 rounded-lg border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 cursor-pointer disabled:opacity-50"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
+                              )}
                               </div>
                             </div>
-                          ))
+                            );
+                          })
                         ) : (
                           <div className="text-center py-6 text-xs font-mono text-neutral-400">
                             Roster Sheet Empty — tap Edit to add players
@@ -2187,7 +2495,7 @@ export default function TournamentDashboard() {
 
       {/* Footer */}
       <footer className="border-t border-slate-200 bg-white py-8 text-center text-[10px] font-mono text-slate-450 tracking-wider">
-        <p>© 2026 MATCH DAY SCORER • POWERED BY GEMINI DEVELOPER AGENT</p>
+        <p>© 2026 FORCEPLUS • POWERED BY GEMINI DEVELOPER AGENT</p>
       </footer>
     </div>
   );

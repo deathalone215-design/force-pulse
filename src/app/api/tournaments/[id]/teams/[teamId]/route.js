@@ -47,6 +47,33 @@ export async function PATCH(request, { params }) {
   }
 }
 
+export async function DELETE(request, { params }) {
+  try {
+    const { id: tournamentId, teamId } = await params;
+
+    const existing = await getTeamInTournament(tournamentId, teamId);
+    if (!existing) {
+      return NextResponse.json({ error: "Team not found" }, { status: 404 });
+    }
+
+    const matchCount = await prisma.match.count({
+      where: {
+        OR: [{ teamAId: teamId }, { teamBId: teamId }],
+      },
+    });
+
+    await prisma.team.delete({ where: { id: teamId } });
+
+    return NextResponse.json({
+      message: "Team deleted",
+      deletedMatches: matchCount,
+    });
+  } catch (error) {
+    console.error("Failed to delete team:", error);
+    return NextResponse.json({ error: "Failed to delete team" }, { status: 500 });
+  }
+}
+
 export async function POST(request, { params }) {
   try {
     const { id: tournamentId, teamId } = await params;

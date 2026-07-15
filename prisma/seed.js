@@ -198,18 +198,31 @@ const openTeams = [
     ]
   },
   {
-    name: "Alice Super FC",
+    name: "Alica Nagar FC",
     players: [
-      { name: "VAIBHAV", shirtNumber: 14 },
-      { name: "VIREN", shirtNumber: 22 },
-      { name: "SOHAM", shirtNumber: 10 },
-      { name: "VAIBHAV", shirtNumber: 25 },
-      { name: "TASNEEM", shirtNumber: 23 },
-      { name: "PARTH", shirtNumber: 11 },
-      { name: "SIDDHANT", shirtNumber: 13 },
-      { name: "GURJIT", shirtNumber: 7 },
-      { name: "AGGASTYA", shirtNumber: 9 },
-      { name: "DEEP", shirtNumber: 43 }
+      { name: "VAIBHAV", shirtNumber: 18 },
+      { name: "VEER", shirtNumber: 10 },
+      { name: "SOHAM", shirtNumber: 29 },
+      { name: "VAIBHAV", shirtNumber: 16 },
+      { name: "SWAYAM", shirtNumber: 25 },
+      { name: "PARTH", shirtNumber: 13 },
+      { name: "SIDDHANT", shirtNumber: 22 },
+      { name: "GUNIT", shirtNumber: 7 },
+      { name: "AAKASH", shirtNumber: 9 },
+      { name: "DEEP", shirtNumber: 45 }
+    ]
+  },
+  {
+    name: "Alica OgBallers",
+    players: [
+      { name: "Aryan", shirtNumber: 11 },
+      { name: "Aditya", shirtNumber: 25 },
+      { name: "Zion", shirtNumber: 19 },
+      { name: "Sumedh", shirtNumber: 10 },
+      { name: "Soham Goythale", shirtNumber: 9 },
+      { name: "Sumant", shirtNumber: 1 },
+      { name: "Chote Rishabh", shirtNumber: 7 },
+      { name: "Shivam", shirtNumber: 8 }
     ]
   }
 ];

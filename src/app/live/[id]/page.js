@@ -447,11 +447,13 @@ export default function PublicLiveBoard() {
   const [error, setError] = useState(null);
   const [activeCategoryId, setActiveCategoryId] = useState(null);
   const [updatedAt, setUpdatedAt] = useState(null);
-  const [section, setSection] = useState("live"); // live, schedule, table, scorers
+  const [section, setSection] = useState("clubs"); // clubs, live, schedule, table, scorers
+  const [expandedClubId, setExpandedClubId] = useState(null);
   const prevLiveCountRef = useRef(0);
   const prevCompletedIdsRef = useRef(null);
   const userPickedCategoryRef = useRef(false);
   const categoryStorageKey = id ? `md_active_category_${id}` : null;
+  const defaultSectionSetRef = useRef(false);
 
   const selectCategory = (catId) => {
     userPickedCategoryRef.current = true;
@@ -471,6 +473,12 @@ export default function PublicLiveBoard() {
       if (!res.ok) throw new Error("Tournament not found");
       const data = await res.json();
       setTournament(data);
+
+      const dayStarted = hasTournamentDayStarted(data);
+      if (!defaultSectionSetRef.current) {
+        defaultSectionSetRef.current = true;
+        setSection(dayStarted ? "live" : "clubs");
+      }
 
       const liveInAny = [];
       const completedIds = [];
@@ -580,35 +588,8 @@ export default function PublicLiveBoard() {
     );
   }
 
-  // Board unlocks on tournament day (e.g. Jul 18). Live matches appear when admin sets LIVE.
-  if (!hasTournamentDayStarted(tournament)) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-cream-bg px-4 text-center gap-5">
-        <div className="w-16 h-16 rounded-2xl bg-white border-2 border-dashed border-mustard-gold flex items-center justify-center">
-          <Clock className="w-8 h-8 text-mustard-gold" />
-        </div>
-        <div className="space-y-2 max-w-md">
-          <h2 className="text-xl font-display uppercase text-deep-forest tracking-wide">
-            {tournament.name}
-          </h2>
-          <p className="text-xs font-mono text-deep-forest/55 leading-relaxed">
-            The live board opens on{" "}
-            <span className="font-bold text-deep-forest">
-              {formatTournamentDate(tournament.startDate)}
-            </span>
-            . On that day, matches appear under Live when an admin sets them to
-            LIVE.
-          </p>
-        </div>
-        <Link
-          href="/"
-          className="px-5 py-2.5 bg-mustard-gold text-deep-forest rounded-xl text-xs font-mono font-bold uppercase"
-        >
-          Back home
-        </Link>
-      </div>
-    );
-  }
+  // Public can browse clubs, schedule, and table before match day.
+  const dayStarted = hasTournamentDayStarted(tournament);
 
   const activeCategory =
     tournament.categories?.find((c) => c.id === activeCategoryId) ||
@@ -641,6 +622,11 @@ export default function PublicLiveBoard() {
     .filter((m) => m.status === "COMPLETED")
     .map((m) => ({ ...m, categoryName: activeCategory?.name }));
 
+  const categoryClubs = (activeCategory?.teams || [])
+    .filter((t) => !isPlaceholderTeam(t.name))
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name));
+
   const isCricket = tournament.sport === "CRICKET";
   const footballStandings = calculateStandings(activeCategory);
   const cricketStandings = calculateCricketStandings(activeCategory).filter(
@@ -653,6 +639,12 @@ export default function PublicLiveBoard() {
     : { runScorers: [], wicketTakers: [] };
 
   const sections = [
+    {
+      id: "clubs",
+      label: "Clubs",
+      icon: Users,
+      count: categoryClubs.length,
+    },
     {
       id: "live",
       label: "Matches",
@@ -698,8 +690,8 @@ export default function PublicLiveBoard() {
               <div className="min-w-0">
             <div className="flex items-center gap-1.5 sm:gap-2 text-mustard-gold font-mono text-[10px] font-bold uppercase tracking-widest mb-1 flex-wrap">
                   <span className="inline-flex items-center gap-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                    Public Live Board
+                    <span className={`w-1.5 h-1.5 rounded-full ${dayStarted ? "bg-red-500 animate-pulse" : "bg-mustard-gold"}`} />
+                    {dayStarted ? "Public Live Board" : "Tournament Preview"}
                   </span>
                   {updatedAt && (
                     <>
@@ -755,6 +747,7 @@ export default function PublicLiveBoard() {
                       type="button"
                       onClick={() => {
                         selectCategory(cat.id);
+                        setExpandedClubId(null);
                       }}
                       className={`px-3.5 sm:px-4 py-2.5 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider border transition-all cursor-pointer min-h-[44px] ${
                         active
@@ -774,6 +767,15 @@ export default function PublicLiveBoard() {
           )}
         </div>
       </header>
+
+      {!dayStarted && (
+        <div className="bg-[#0d472c] text-white py-2.5 text-center border-b border-mustard-gold/40">
+          <div className="max-w-6xl mx-auto px-4 flex flex-wrap items-center justify-center gap-2 text-[10px] sm:text-xs font-mono font-bold tracking-wider uppercase">
+            <Clock className="w-3.5 h-3.5 text-mustard-gold" />
+            Preview mode — live scoring from {formatTournamentDate(tournament.startDate)}
+          </div>
+        </div>
+      )}
 
       {allLiveMatches.length > 0 && (
         <div className="bg-red-600 text-white py-2.5 text-center">
@@ -814,16 +816,130 @@ export default function PublicLiveBoard() {
       </div>
 
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-6 sm:py-8 space-y-8 sm:space-y-10">
+        {section === "clubs" && (
+          <section className="space-y-5 animate-fadeIn">
+            <div className="flex items-center gap-3 flex-wrap">
+              <h2 className="text-xs font-mono font-bold uppercase tracking-widest text-deep-forest/60">
+                Clubs — {activeCategory?.name}
+              </h2>
+              <span className="text-[9px] font-mono text-deep-forest/45 uppercase tracking-wider">
+                Tap a club for the squad
+              </span>
+            </div>
+
+            {categoryClubs.length === 0 ? (
+              <div className="bg-white border-2 border-dashed border-slate-200 rounded-2xl py-12 px-6 text-center">
+                <Users className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                <p className="text-xs font-mono text-deep-forest/50">No clubs registered yet</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {categoryClubs.map((club) => {
+                  const open = expandedClubId === club.id;
+                  const players = [...(club.players || [])].sort(
+                    (a, b) => (a.shirtNumber || 0) - (b.shirtNumber || 0)
+                  );
+                  return (
+                    <button
+                      key={club.id}
+                      type="button"
+                      onClick={() =>
+                        setExpandedClubId((prev) => (prev === club.id ? null : club.id))
+                      }
+                      className={`w-full text-left bg-white rounded-2xl border-2 p-4 sm:p-5 transition-all cursor-pointer ${
+                        open
+                          ? "border-mustard-gold ring-2 ring-mustard-gold/30"
+                          : "border-dashed border-mustard-gold/70 hover:border-solid"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <TeamBadge team={club} size="lg" />
+                        <div className="min-w-0 flex-1">
+                          <h3 className="text-sm font-display uppercase tracking-wide text-deep-forest truncate">
+                            {club.name}
+                          </h3>
+                          <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-deep-forest/50">
+                            {players.length} player{players.length === 1 ? "" : "s"}
+                            <span className="ml-2 text-deep-forest/35 normal-case tracking-normal">
+                              {open ? "· hide" : "· tap for squad"}
+                            </span>
+                          </p>
+                        </div>
+                      </div>
+
+                      {open && (
+                        <div className="mt-4 pt-3 border-t border-slate-100 space-y-1.5 animate-fadeIn">
+                          {players.length === 0 ? (
+                            <p className="text-[10px] font-mono text-deep-forest/40 py-2">
+                              No players registered
+                            </p>
+                          ) : (
+                            players.map((p) => (
+                              <div
+                                key={p.id}
+                                className="flex items-center justify-between gap-2 text-xs bg-[#fcf7ed] rounded-lg px-3 py-2"
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  {p.logoUrl ? (
+                                    <img
+                                      src={p.logoUrl}
+                                      alt=""
+                                      className="w-7 h-7 rounded-full object-cover border border-mustard-gold/40 shrink-0"
+                                    />
+                                  ) : (
+                                    <div className="w-7 h-7 rounded-full bg-white border border-slate-200 flex items-center justify-center text-[9px] font-bold text-deep-forest/50 shrink-0">
+                                      {(p.name || "?").slice(0, 1).toUpperCase()}
+                                    </div>
+                                  )}
+                                  <span className="font-sans font-bold uppercase truncate text-deep-forest">
+                                    {p.name}
+                                  </span>
+                                </div>
+                                <span className="text-[9px] font-mono font-bold text-deep-forest bg-mustard-gold/15 border border-mustard-gold/30 rounded px-1.5 py-0.5 shrink-0">
+                                  No. {p.shirtNumber}
+                                </span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
+
         {section === "live" && (
           <section className="space-y-10 animate-fadeIn">
             <div className="flex items-center gap-3 flex-wrap">
               <h2 className="text-xs font-mono font-bold uppercase tracking-widest text-deep-forest/60">
                 Match Centre — {activeCategory?.name}
               </h2>
-              <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-0.5">
-                Auto-refresh 3s
-              </span>
+              {dayStarted ? (
+                <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-red-600 bg-red-50 border border-red-200 rounded-md px-2 py-0.5">
+                  Auto-refresh 3s
+                </span>
+              ) : (
+                <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-deep-forest/55 bg-cream-bg border border-slate-200 rounded-md px-2 py-0.5">
+                  Live from {formatTournamentDate(tournament.startDate)}
+                </span>
+              )}
             </div>
+
+            {!dayStarted && (
+              <div className="bg-white border-2 border-dashed border-mustard-gold/50 rounded-2xl py-8 px-6 text-center">
+                <Clock className="w-8 h-8 text-mustard-gold mx-auto mb-2" />
+                <p className="text-xs font-mono text-deep-forest/60 leading-relaxed max-w-md mx-auto">
+                  Live scoring opens on{" "}
+                  <span className="font-bold text-deep-forest">
+                    {formatTournamentDate(tournament.startDate)}
+                  </span>
+                  . Browse Clubs and Schedule meanwhile.
+                </p>
+              </div>
+            )}
 
             {/* LIVE (selected category) */}
             <div className="space-y-4">

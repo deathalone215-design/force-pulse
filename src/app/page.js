@@ -31,7 +31,9 @@ function teamCount(tournament) {
 function TournamentCard({ t, mode }) {
   const isLive = mode === "live";
   const isReady = mode === "ready";
-  const canOpen = isLive || isReady;
+  const isUpcoming = mode === "upcoming";
+  // Always openable: preview clubs/schedule before match day; live board after.
+  const canOpen = true;
 
   const footerLabel = isLive ? (
     <>
@@ -41,12 +43,12 @@ function TournamentCard({ t, mode }) {
   ) : isReady ? (
     <>
       <Radio className="w-3.5 h-3.5" />
-      Match day — waiting for kickoff
+      Match day — open board
     </>
   ) : (
     <>
-      <Clock className="w-3.5 h-3.5" />
-      Live from {formatTournamentDate(t.startDate)}
+      <Users className="w-3.5 h-3.5" />
+      View clubs, players &amp; schedule
     </>
   );
 
@@ -101,17 +103,17 @@ function TournamentCard({ t, mode }) {
           className={`p-2 rounded-xl border shrink-0 ${
             isLive
               ? "bg-red-50 border-red-200 text-red-700"
-              : canOpen
-                ? "bg-cream-bg border-slate-200 group-hover:bg-mustard-gold group-hover:border-mustard-gold"
-                : "bg-slate-50 border-slate-200"
+              : isUpcoming
+                ? "bg-cream-bg border-mustard-gold/50 group-hover:bg-mustard-gold group-hover:border-mustard-gold"
+                : "bg-cream-bg border-slate-200 group-hover:bg-mustard-gold group-hover:border-mustard-gold"
           }`}
         >
           {isLive ? (
             <Activity className="w-4 h-4 animate-pulse" />
-          ) : canOpen ? (
-            <Radio className="w-4 h-4" />
+          ) : isUpcoming ? (
+            <Users className="w-4 h-4" />
           ) : (
-            <Clock className="w-4 h-4 text-slate-400" />
+            <Radio className="w-4 h-4" />
           )}
         </div>
       </div>
@@ -131,9 +133,7 @@ function TournamentCard({ t, mode }) {
         className={`mt-4 flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-wider ${
           isLive
             ? "text-red-700"
-            : canOpen
-              ? "text-mustard-gold-hover"
-              : "text-deep-forest/45"
+            : "text-mustard-gold-hover"
         }`}
       >
         {footerLabel}
@@ -141,23 +141,19 @@ function TournamentCard({ t, mode }) {
     </>
   );
 
-  if (canOpen) {
-    return (
-      <Link
-        href={`/live/${t.id}`}
-        className={`group flex flex-col bg-white border-2 border-dashed rounded-2xl p-4 sm:p-6 transition-all duration-300 shadow-sm relative overflow-hidden hover:border-solid hover:shadow-md ${
-          isLive ? "border-red-300 ring-1 ring-red-100" : "border-mustard-gold"
-        }`}
-      >
-        {cardBody}
-      </Link>
-    );
-  }
-
   return (
-    <div className="group flex flex-col bg-white border-2 border-dashed border-slate-300 rounded-2xl p-4 sm:p-6 shadow-sm relative overflow-hidden opacity-95">
+    <Link
+      href={`/live/${t.id}`}
+      className={`group flex flex-col bg-white border-2 border-dashed rounded-2xl p-4 sm:p-6 transition-all duration-300 shadow-sm relative overflow-hidden hover:border-solid hover:shadow-md ${
+        isLive
+          ? "border-red-300 ring-1 ring-red-100"
+          : isUpcoming
+            ? "border-slate-300 hover:border-mustard-gold"
+            : "border-mustard-gold"
+      }`}
+    >
       {cardBody}
-    </div>
+    </Link>
   );
 }
 
@@ -327,10 +323,6 @@ export default function PublicHome() {
           </>
         )}
       </main>
-
-      <footer className="border-t border-slate-200 bg-white py-8 text-center text-[10px] font-mono text-slate-400 tracking-wider">
-        © 2026 MATCH DAY · SPECTATOR VIEW
-      </footer>
     </div>
   );
 }
