@@ -70,7 +70,8 @@ export async function middleware(request) {
   if (isMutating) {
     const isProtectedApi =
       pathname.startsWith("/api/tournaments") ||
-      pathname.startsWith("/api/matches");
+      pathname.startsWith("/api/matches") ||
+      pathname.startsWith("/api/upload");
 
     if (isProtectedApi && !isAuthed) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -81,5 +82,10 @@ export async function middleware(request) {
 }
 
 export const config = {
-  matcher: ["/tournaments/:path*", "/api/tournaments/:path*", "/api/matches/:path*"],
+  matcher: [
+    "/tournaments/:path*",
+    "/api/tournaments/:path*",
+    "/api/matches/:path*",
+    "/api/upload",
+  ],
 };

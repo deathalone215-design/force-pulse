@@ -21,6 +21,7 @@ import {
   LogOut,
   Trash2,
 } from "lucide-react";
+import { uploadImageToSupabase } from "@/lib/imageUpload";
 
 const SUGGESTED_CATEGORIES = ["U12", "U13", "U14", "U15", "U16", "U18", "OPEN"];
 
@@ -252,23 +253,15 @@ export default function AdminHome() {
     }
   };
 
-  const handleLogoChange = (e) => {
+  const handleLogoChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      alert("Please select an image file");
-      return;
+    try {
+      setLogoUrl(await uploadImageToSupabase(file, { folder: "tournaments" }));
+    } catch (err) {
+      alert(err.message);
+      e.target.value = "";
     }
-
-    if (file.size > 2 * 1024 * 1024) {
-      alert("Logo must be under 2MB");
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = () => setLogoUrl(reader.result);
-    reader.readAsDataURL(file);
   };
 
   const clearLogo = () => {
@@ -367,23 +360,15 @@ export default function AdminHome() {
     }
   };
 
-  const handleEditLogoChange = (e) => {
+  const handleEditLogoChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      alert("Please select an image file");
-      return;
+    try {
+      setEditLogoUrl(await uploadImageToSupabase(file, { folder: "tournaments" }));
+    } catch (err) {
+      alert(err.message);
+      e.target.value = "";
     }
-
-    if (file.size > 2 * 1024 * 1024) {
-      alert("Logo must be under 2MB");
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = () => setEditLogoUrl(reader.result);
-    reader.readAsDataURL(file);
   };
 
   const handleSaveEdit = async (e) => {

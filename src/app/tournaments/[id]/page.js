@@ -15,6 +15,7 @@ import {
   calculateCricketLeaders,
   calculateCricketStandings,
 } from "@/lib/cricket";
+import { uploadImageToSupabase } from "@/lib/imageUpload";
 
 const isPlaceholderTeam = (name) => {
   if (!name) return false;
@@ -88,44 +89,8 @@ export default function TournamentDashboard() {
   const editTeamLogoInputRef = useRef(null);
   const editPlayerLogoInputRef = useRef(null);
 
-  const readImageAsDataUrl = (file) =>
-    new Promise((resolve, reject) => {
-      if (!file) return reject(new Error("No file"));
-      if (!file.type.startsWith("image/")) {
-        reject(new Error("Please select an image file"));
-        return;
-      }
-      if (file.size > 2 * 1024 * 1024) {
-        reject(new Error("Image must be under 2MB"));
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = () => {
-        const raw = reader.result;
-        // Shrink large photos so club/player logos fit Vercel request limits
-        const img = new Image();
-        img.onload = () => {
-          const maxSide = 512;
-          const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-          const w = Math.max(1, Math.round(img.width * scale));
-          const h = Math.max(1, Math.round(img.height * scale));
-          const canvas = document.createElement("canvas");
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext("2d");
-          if (!ctx) {
-            resolve(raw);
-            return;
-          }
-          ctx.drawImage(img, 0, 0, w, h);
-          resolve(canvas.toDataURL("image/jpeg", 0.82));
-        };
-        img.onerror = () => resolve(raw);
-        img.src = raw;
-      };
-      reader.onerror = () => reject(new Error("Failed to read image"));
-      reader.readAsDataURL(file);
-    });
+  const processImageFile = async (file, folder) =>
+    uploadImageToSupabase(file, { folder, maxSide: 1024, quality: 0.82 });
 
   // Pick real teams for a scheduled match (e.g. semi-final TBD slots)
   const [pickingMatchId, setPickingMatchId] = useState(null);
@@ -310,7 +275,7 @@ export default function TournamentDashboard() {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      setNewTeamLogoUrl(await readImageAsDataUrl(file));
+      setNewTeamLogoUrl(await processImageFile(file, "clubs"));
     } catch (err) {
       alert(err.message);
       e.target.value = "";
@@ -321,7 +286,7 @@ export default function TournamentDashboard() {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const logoUrl = await readImageAsDataUrl(file);
+      const logoUrl = await processImageFile(file, "players");
       updatePlayerField(index, "logoUrl", logoUrl);
     } catch (err) {
       alert(err.message);
@@ -361,7 +326,7 @@ export default function TournamentDashboard() {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      setEditTeamLogoUrl(await readImageAsDataUrl(file));
+      setEditTeamLogoUrl(await processImageFile(file, "clubs"));
     } catch (err) {
       alert(err.message);
       e.target.value = "";
@@ -372,7 +337,7 @@ export default function TournamentDashboard() {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      setEditPlayerLogoUrl(await readImageAsDataUrl(file));
+      setEditPlayerLogoUrl(await processImageFile(file, "players"));
     } catch (err) {
       alert(err.message);
       e.target.value = "";
@@ -384,7 +349,7 @@ export default function TournamentDashboard() {
     if (!file) return;
     try {
       setSavingTeamEdit(true);
-      const logoUrl = await readImageAsDataUrl(file);
+      const logoUrl = await processImageFile(file, "players");
       const res = await fetch(
         `/api/tournaments/${id}/teams/${teamId}/players/${playerId}`,
         {
