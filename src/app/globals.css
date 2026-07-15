@@ -1,26 +1,71 @@
 @import "tailwindcss";
 
+@theme {
+  --font-display: var(--font-anton), sans-serif;
+  --font-sans: var(--font-work-sans), sans-serif;
+  --font-mono: var(--font-roboto-mono), monospace;
+  
+  --color-pitch-green: #0d472c;
+  --color-pitch-green-dark: #093c24;
+  --color-mustard-gold: #e5a93b;
+  --color-mustard-gold-hover: #d2962a;
+  --color-cream-bg: #FAF6EE;
+  --color-deep-forest: #0a331f;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #FAF6EE;
+  --foreground: #0a331f;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-work-sans), sans-serif;
+  overflow-x: hidden;
+}
+
+/* Soften pitch stripes on narrow screens */
+@media (max-width: 640px) {
+  .pitch-stripes {
+    background-size: 48px 100%;
+  }
+}
+
+/* Custom scrollbars — slightly larger on touch-friendly horizontal scroll */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #FAF6EE;
+}
+::-webkit-scrollbar-thumb {
+  background: #d4cdc1;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #b5ac9d;
+}
+
+/* Vertical pitch stripes pattern for header */
+.pitch-stripes {
+  background-color: #0d472c;
+  background-image: linear-gradient(
+    90deg,
+    #093c24 50%,
+    transparent 50%
+  );
+  background-size: 80px 100%;
+}
+
+/* Horizontal scroll hint for sticky tab bars */
+.tab-scroll {
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
