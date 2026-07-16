@@ -219,7 +219,7 @@ export default function PublicHome() {
           </div>
 
           <h1 className="text-4xl sm:text-5xl md:text-7xl font-display uppercase tracking-normal text-white drop-shadow-lg">
-            FORCEPLUS
+            FORCE PULSE
           </h1>
           <p className="text-sm sm:text-base md:text-lg text-white/85 font-medium max-w-xl leading-relaxed">
             Follow live scores, fixtures, points tables, and top scorers.

@@ -729,13 +729,22 @@ export default function PublicLiveBoard() {
               </div>
             </div>
           </div>
+        </div>
+      </header>
 
-          {(tournament.categories || []).length > 0 && (
-            <div className="mt-5 pt-4 border-t border-white/15">
-              <p className="text-[9px] font-mono font-bold uppercase tracking-widest text-mustard-gold/80 mb-2.5">
-                Categories
-              </p>
-              <div className="flex flex-wrap gap-2">
+      {(tournament.categories || []).length > 0 && (
+        <div className="sticky top-0 z-30 bg-[#0a331f] border-b-4 border-mustard-gold shadow-md">
+          <div className="max-w-6xl mx-auto px-4 py-3 sm:py-4">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+              <div className="shrink-0">
+                <p className="text-[10px] sm:text-xs font-mono font-bold uppercase tracking-[0.2em] text-mustard-gold">
+                  Category
+                </p>
+                <p className="text-[10px] font-mono text-white/50 hidden sm:block">
+                  Switch OPEN / age group
+                </p>
+              </div>
+              <div className="flex-1 grid grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-3">
                 {(tournament.categories || []).map((cat) => {
                   const active = cat.id === activeCategory?.id;
                   const clubs = (cat.teams || []).filter((t) => !isPlaceholderTeam(t.name)).length;
@@ -747,24 +756,61 @@ export default function PublicLiveBoard() {
                         selectCategory(cat.id);
                         setExpandedClubId(null);
                       }}
-                      className={`px-3.5 sm:px-4 py-2.5 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider border transition-all cursor-pointer min-h-[44px] ${
+                      className={`relative flex items-center justify-center gap-2 px-4 sm:px-6 py-3.5 sm:py-4 rounded-xl font-display uppercase tracking-wide text-base sm:text-xl border-2 min-h-[52px] sm:min-h-[60px] cursor-pointer transition-all ${
                         active
-                          ? "bg-mustard-gold text-deep-forest border-mustard-gold shadow-sm"
-                          : "bg-white/10 text-white border-white/20 hover:bg-white/15"
+                          ? "bg-mustard-gold text-deep-forest border-mustard-gold shadow-[0_4px_0_#0a331f] scale-[1.02]"
+                          : "bg-[#0d472c] text-white/85 border-white/25 hover:border-mustard-gold/70 hover:text-white"
                       }`}
                     >
-                      {cat.name}
-                      <span className={`ml-1.5 ${active ? "opacity-70" : "opacity-50"}`}>
-                        ({clubs})
+                      {active && (
+                        <span className="absolute -top-2 left-1/2 -translate-x-1/2 text-[8px] font-mono font-bold uppercase tracking-widest bg-deep-forest text-mustard-gold px-2 py-0.5 rounded border border-mustard-gold/60">
+                          Viewing
+                        </span>
+                      )}
+                      <span>{cat.name}</span>
+                      <span
+                        className={`text-sm sm:text-base font-mono font-bold normal-case tracking-normal ${
+                          active ? "text-deep-forest/70" : "text-white/45"
+                        }`}
+                      >
+                        {clubs}
                       </span>
                     </button>
                   );
                 })}
               </div>
             </div>
-          )}
+          </div>
+          <div className="bg-white border-t border-slate-200">
+            <div className="max-w-6xl mx-auto px-4 overflow-x-auto tab-scroll flex gap-2 py-3">
+              {sections.map((s) => {
+                const Icon = s.icon;
+                const active = section === s.id;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => setSection(s.id)}
+                    className={`flex items-center gap-2 py-2.5 px-3.5 sm:px-4 rounded-xl font-mono text-[10px] uppercase tracking-wider cursor-pointer whitespace-nowrap transition-all border min-h-[44px] ${
+                      active
+                        ? "bg-mustard-gold text-deep-forest border-mustard-gold font-bold"
+                        : "bg-cream-bg text-deep-forest/70 border-transparent hover:border-mustard-gold/40"
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    {s.label}
+                    {s.count > 0 && (
+                      <span className={`rounded-full px-1.5 py-0.5 text-[9px] ${active ? "bg-deep-forest/10" : "bg-white border border-slate-200"}`}>
+                        {s.count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
-      </header>
+      )}
 
       {!dayStarted && (
         <div className="bg-[#0d472c] text-white py-2.5 text-center border-b border-mustard-gold/40">
@@ -784,34 +830,36 @@ export default function PublicLiveBoard() {
         </div>
       )}
 
-      <div className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-sm">
-        <div className="max-w-6xl mx-auto px-4 overflow-x-auto tab-scroll flex gap-2 py-3">
-          {sections.map((s) => {
-            const Icon = s.icon;
-            const active = section === s.id;
-            return (
-              <button
-                key={s.id}
-                type="button"
-                onClick={() => setSection(s.id)}
-                className={`flex items-center gap-2 py-2.5 px-3.5 sm:px-4 rounded-xl font-mono text-[10px] uppercase tracking-wider cursor-pointer whitespace-nowrap transition-all border min-h-[44px] ${
-                  active
-                    ? "bg-mustard-gold text-deep-forest border-mustard-gold font-bold"
-                    : "bg-cream-bg text-deep-forest/70 border-transparent hover:border-mustard-gold/40"
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5" />
-                {s.label}
-                {s.count > 0 && (
-                  <span className={`rounded-full px-1.5 py-0.5 text-[9px] ${active ? "bg-deep-forest/10" : "bg-white border border-slate-200"}`}>
-                    {s.count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+      {(tournament.categories || []).length === 0 && (
+        <div className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-sm">
+          <div className="max-w-6xl mx-auto px-4 overflow-x-auto tab-scroll flex gap-2 py-3">
+            {sections.map((s) => {
+              const Icon = s.icon;
+              const active = section === s.id;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  onClick={() => setSection(s.id)}
+                  className={`flex items-center gap-2 py-2.5 px-3.5 sm:px-4 rounded-xl font-mono text-[10px] uppercase tracking-wider cursor-pointer whitespace-nowrap transition-all border min-h-[44px] ${
+                    active
+                      ? "bg-mustard-gold text-deep-forest border-mustard-gold font-bold"
+                      : "bg-cream-bg text-deep-forest/70 border-transparent hover:border-mustard-gold/40"
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  {s.label}
+                  {s.count > 0 && (
+                    <span className={`rounded-full px-1.5 py-0.5 text-[9px] ${active ? "bg-deep-forest/10" : "bg-white border border-slate-200"}`}>
+                      {s.count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
 
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-6 sm:py-8 space-y-8 sm:space-y-10">
         {section === "clubs" && (

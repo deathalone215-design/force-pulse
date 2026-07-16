@@ -979,7 +979,7 @@ export default function TournamentDashboard() {
               ) : null}
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-1.5 text-mustard-gold font-mono text-[9px] sm:text-[10px] font-bold uppercase tracking-wide sm:tracking-widest">
-                  <span>FORCEPLUS</span>
+                  <span>FORCE PULSE</span>
                   <span>•</span>
                   <span>
                     {isCricket
@@ -2460,7 +2460,7 @@ export default function TournamentDashboard() {
 
       {/* Footer */}
       <footer className="border-t border-slate-200 bg-white py-8 text-center text-[10px] font-mono text-slate-450 tracking-wider">
-        <p>© 2026 FORCEPLUS • POWERED BY GEMINI DEVELOPER AGENT</p>
+        <p>© 2026 FORCE PULSE</p>
       </footer>
     </div>
   );

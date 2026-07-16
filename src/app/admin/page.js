@@ -431,7 +431,7 @@ export default function AdminHome() {
               Restricted
             </div>
             <h1 className="text-3xl font-display uppercase text-white drop-shadow">
-              FORCEPLUS Admin
+              FORCE PULSE Admin
             </h1>
           </div>
         </header>
@@ -493,7 +493,7 @@ export default function AdminHome() {
         <div className="max-w-6xl mx-auto px-4 relative z-10 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-1.5 text-mustard-gold font-mono text-[10px] sm:text-xs font-bold uppercase tracking-widest">
-              <span>FORCEPLUS</span>
+              <span>FORCE PULSE</span>
               <span className="text-white/60">•</span>
               <span>Tournament Manager</span>
             </div>
@@ -534,7 +534,7 @@ export default function AdminHome() {
                   <input
                     type="text"
                     required
-                    placeholder="e.g. FORCEPLUS Championship 2026"
+                    placeholder="e.g. FORCE PULSE Championship 2026"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     className="w-full bg-cream-bg/40 border border-slate-200 focus:bg-white focus:border-mustard-gold focus:ring-1 focus:ring-mustard-gold rounded-xl px-4 py-2.5 text-sm text-deep-forest placeholder-slate-400 outline-none transition-all"
@@ -1016,7 +1016,7 @@ export default function AdminHome() {
       )}
 
       <footer className="border-t border-slate-200 bg-white py-8 text-center text-[10px] font-mono text-slate-400 tracking-wider">
-        <p>© 2026 FORCEPLUS • POWERED BY GEMINI DEVELOPER AGENT</p>
+        <p>© 2026 FORCE PULSE</p>
       </footer>
     </div>
   );

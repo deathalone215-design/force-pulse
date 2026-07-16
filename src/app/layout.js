@@ -18,7 +18,7 @@ const robotoMono = Roboto_Mono({
 });
 
 export const metadata = {
-  title: "FORCEPLUS — Tournament Scorer",
+  title: "FORCE PULSE — Tournament Scorer",
   description: "Live scoring and tournament standings tracker.",
 };
 
