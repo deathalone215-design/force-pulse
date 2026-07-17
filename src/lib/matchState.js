@@ -153,4 +153,7 @@ export const matchMutationSelect = {
   penaltyScoreA: true,
   penaltyScoreB: true,
   updatedAt: true,
+  version: true,
+  scoreLockId: true,
+  scoreLockedAt: true,
 };

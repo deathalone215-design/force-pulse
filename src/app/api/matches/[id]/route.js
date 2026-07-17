@@ -2,6 +2,11 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { findResolvedMatch } from "@/lib/tournamentData";
 import { matchDetailInclude } from "@/lib/matchState";
+import {
+  casErrorResponse,
+  casUpdateMatch,
+  parseExpectedVersion,
+} from "@/lib/matchCas";
 
 export async function GET(_request, { params }) {
   try {
@@ -77,14 +82,16 @@ export async function PATCH(request, { params }) {
       );
     }
 
-    await prisma.match.update({
-      where: { id },
+    await casUpdateMatch(prisma, id, {
+      expectedVersion: parseExpectedVersion(body),
       data: { teamAId, teamBId },
     });
 
     const resolvedMatch = await findResolvedMatch(id);
     return NextResponse.json(resolvedMatch);
   } catch (error) {
+    const casRes = casErrorResponse(error);
+    if (casRes) return casRes;
     console.error("Failed to update match teams:", error);
     return NextResponse.json(
       { error: "Failed to update match teams" },

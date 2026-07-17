@@ -45,6 +45,7 @@ import {
 import { categoryDisplayName } from "@/lib/sports";
 import { isPlaceholderTeam } from "@/lib/tournamentResolver";
 import { getRoundDisplayName } from "@/lib/scheduleFormats";
+import { applyLiveBoardDelta } from "@/lib/liveBoardMerge";
 import {
   formatFootballClock,
   footballElapsedSeconds,
@@ -1370,6 +1371,8 @@ export default function PublicLiveBoard() {
   const userPickedCategoryRef = useRef(false);
   const categoryStorageKey = id ? `md_active_category_${id}` : null;
   const defaultSectionSetRef = useRef(false);
+  const serverTimeRef = useRef(null);
+  const deltaFailRef = useRef(0);
 
   const selectCategory = (catId) => {
     userPickedCategoryRef.current = true;
@@ -1383,114 +1386,158 @@ export default function PublicLiveBoard() {
     }
   };
 
-  const fetchData = useCallback(async ({ silent = false } = {}) => {
-    try {
-      const res = await fetch(`/api/tournaments/${id}`, { cache: "no-store" });
-      if (!res.ok) throw new Error("Tournament not found");
-      const data = await res.json();
-      setTournament(data);
+  const syncBoardMeta = useCallback((data) => {
+    const dayStarted = hasTournamentDayStarted(data);
+    if (!defaultSectionSetRef.current) {
+      defaultSectionSetRef.current = true;
+      setSection(dayStarted ? "live" : "clubs");
+    }
 
-      const dayStarted = hasTournamentDayStarted(data);
-      if (!defaultSectionSetRef.current) {
-        defaultSectionSetRef.current = true;
-        setSection(dayStarted ? "live" : "clubs");
-      }
-
-      const liveInAny = [];
-      const completedIds = [];
-      for (const cat of data.categories || []) {
-        for (const round of cat.rounds || []) {
-          for (const match of round.matches || []) {
-            if (match.status === "LIVE") {
-              liveInAny.push({ match, categoryId: cat.id });
-            }
-            if (match.status === "COMPLETED") {
-              completedIds.push(match.id);
-            }
+    const liveInAny = [];
+    const completedIds = [];
+    for (const cat of data.categories || []) {
+      for (const round of cat.rounds || []) {
+        for (const match of round.matches || []) {
+          if (match.status === "LIVE") {
+            liveInAny.push({ match, categoryId: cat.id });
+          }
+          if (match.status === "COMPLETED") {
+            completedIds.push(match.id);
           }
         }
       }
+    }
 
-      const liveCount = liveInAny.length;
+    const liveCount = liveInAny.length;
+    if (liveCount > 0 && prevLiveCountRef.current === 0) {
+      setSection("live");
+    }
+    prevLiveCountRef.current = liveCount;
 
-      // Only jump to Live Scores when a match newly becomes LIVE (0 → 1+)
-      if (liveCount > 0 && prevLiveCountRef.current === 0) {
-        setSection("live");
-      }
-      prevLiveCountRef.current = liveCount;
-
-      // When a match is newly marked COMPLETED, show Points Table (points just locked in)
-      if (prevCompletedIdsRef.current !== null) {
-        const prev = new Set(prevCompletedIdsRef.current);
-        const newlyCompleted = completedIds.filter((mid) => !prev.has(mid));
-        if (newlyCompleted.length > 0) {
-          setSection("table");
-          outer: for (const cat of data.categories || []) {
-            for (const round of cat.rounds || []) {
-              for (const match of round.matches || []) {
-                if (newlyCompleted.includes(match.id)) {
-                  setActiveCategoryId(cat.id);
-                  break outer;
-                }
+    if (prevCompletedIdsRef.current !== null) {
+      const prev = new Set(prevCompletedIdsRef.current);
+      const newlyCompleted = completedIds.filter((mid) => !prev.has(mid));
+      if (newlyCompleted.length > 0) {
+        setSection("table");
+        outer: for (const cat of data.categories || []) {
+          for (const round of cat.rounds || []) {
+            for (const match of round.matches || []) {
+              if (newlyCompleted.includes(match.id)) {
+                setActiveCategoryId(cat.id);
+                break outer;
               }
             }
           }
         }
       }
-      prevCompletedIdsRef.current = completedIds;
-
-      setActiveCategoryId((prev) => {
-        let stored = null;
-        if (typeof window !== "undefined" && categoryStorageKey) {
-          try {
-            stored = window.localStorage.getItem(categoryStorageKey);
-          } catch {
-            stored = null;
-          }
-        }
-        if (prev && data.categories?.some((c) => c.id === prev)) return prev;
-        if (stored && data.categories?.some((c) => c.id === stored)) {
-          userPickedCategoryRef.current = true;
-          return stored;
-        }
-        if (
-          !userPickedCategoryRef.current &&
-          liveInAny.length > 0
-        ) {
-          return liveInAny[0].categoryId;
-        }
-        return data.categories?.[0]?.id || null;
-      });
-
-      setUpdatedAt(new Date());
-      if (!silent) setError(null);
-    } catch (err) {
-      if (!silent) setError(err.message);
-    } finally {
-      if (!silent) setLoading(false);
     }
-  }, [id, categoryStorageKey]);
+    prevCompletedIdsRef.current = completedIds;
+
+    setActiveCategoryId((prev) => {
+      let stored = null;
+      if (typeof window !== "undefined" && categoryStorageKey) {
+        try {
+          stored = window.localStorage.getItem(categoryStorageKey);
+        } catch {
+          stored = null;
+        }
+      }
+      if (prev && data.categories?.some((c) => c.id === prev)) return prev;
+      if (stored && data.categories?.some((c) => c.id === stored)) {
+        userPickedCategoryRef.current = true;
+        return stored;
+      }
+      if (!userPickedCategoryRef.current && liveInAny.length > 0) {
+        return liveInAny[0].categoryId;
+      }
+      return data.categories?.[0]?.id || null;
+    });
+
+    setUpdatedAt(new Date());
+  }, [categoryStorageKey]);
+
+  /** Full snapshot bootstrap (and rare fallback). */
+  const fetchSnapshot = useCallback(
+    async ({ silent = false } = {}) => {
+      try {
+        const res = await fetch(`/api/tournaments/${id}?view=live`, {
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error("Tournament not found");
+        const data = await res.json();
+        serverTimeRef.current = data.serverTime || new Date().toISOString();
+        setTournament(data);
+        syncBoardMeta(data);
+        deltaFailRef.current = 0;
+        if (!silent) setError(null);
+        return data;
+      } catch (err) {
+        if (!silent) setError(err.message);
+        return null;
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [id, syncBoardMeta]
+  );
+
+  /** Cheap incremental poll — LIVE + recently changed matches only. */
+  const fetchDelta = useCallback(async () => {
+    try {
+      const since = serverTimeRef.current
+        ? encodeURIComponent(serverTimeRef.current)
+        : "";
+      const res = await fetch(
+        `/api/tournaments/${id}?view=delta${since ? `&since=${since}` : ""}`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) throw new Error("Delta failed");
+      const delta = await res.json();
+      if (delta.serverTime) serverTimeRef.current = delta.serverTime;
+
+      setTournament((prev) => {
+        if (!prev) return prev;
+        const next = applyLiveBoardDelta(prev, delta.matches || []);
+        Promise.resolve().then(() => syncBoardMeta(next));
+        return next;
+      });
+      deltaFailRef.current = 0;
+    } catch (err) {
+      console.warn("Live delta failed:", err?.message || err);
+      deltaFailRef.current += 1;
+      // After 3 failed deltas, fall back to a full snapshot
+      if (deltaFailRef.current >= 3) {
+        await fetchSnapshot({ silent: true });
+      }
+    }
+  }, [id, syncBoardMeta, fetchSnapshot]);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    fetchSnapshot();
+  }, [fetchSnapshot]);
 
-  // Refresh live scores every 4s while the board tab is visible
+  // Bootstrap once, then poll deltas every 4s (full snapshot every ~60s as safety net)
   useEffect(() => {
+    let ticks = 0;
     const tick = () => {
       if (typeof document !== "undefined" && document.hidden) return;
-      fetchData({ silent: true });
+      ticks += 1;
+      if (ticks % 15 === 0) {
+        fetchSnapshot({ silent: true });
+      } else {
+        fetchDelta();
+      }
     };
     const timer = setInterval(tick, 4000);
     const onVis = () => {
-      if (!document.hidden) fetchData({ silent: true });
+      if (!document.hidden) fetchDelta();
     };
     document.addEventListener("visibilitychange", onVis);
     return () => {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [fetchData]);
+  }, [fetchDelta, fetchSnapshot]);
 
   if (loading) {
     return (

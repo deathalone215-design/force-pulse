@@ -2,11 +2,52 @@ import { createHmac, timingSafeEqual } from "crypto";
 
 export const ADMIN_COOKIE = "md_admin_session";
 
+const INSECURE_PASSWORDS = new Set(["admin", "password", "123456", "changeme"]);
+const INSECURE_SECRETS = new Set([
+  "matchday-dev-secret",
+  "change-me-in-production",
+  "secret",
+  "dev",
+]);
+
+function isProduction() {
+  return process.env.NODE_ENV === "production";
+}
+
+/** True when env is missing or still a known insecure default. */
+export function hasInsecureAdminConfig() {
+  const password = process.env.ADMIN_PASSWORD;
+  const secret = process.env.ADMIN_SECRET;
+  if (!password || !secret) return true;
+  if (INSECURE_PASSWORDS.has(password.toLowerCase())) return true;
+  if (INSECURE_SECRETS.has(secret.toLowerCase())) return true;
+  if (secret.length < 16) return true;
+  return false;
+}
+
+/**
+ * Fail closed in production if admin credentials are missing/weak.
+ * Safe to call at boot (instrumentation) and on login.
+ */
+export function assertProductionSecrets() {
+  if (!isProduction()) return;
+  if (!hasInsecureAdminConfig()) return;
+  throw new Error(
+    "Refusing to start: set strong ADMIN_PASSWORD and ADMIN_SECRET in production (secret ≥ 16 chars, not a known default)."
+  );
+}
+
 export function getAdminPassword() {
+  if (isProduction() && hasInsecureAdminConfig()) {
+    throw new Error("ADMIN_PASSWORD / ADMIN_SECRET are not configured for production");
+  }
   return process.env.ADMIN_PASSWORD || "admin";
 }
 
 export function getAdminSecret() {
+  if (isProduction() && hasInsecureAdminConfig()) {
+    throw new Error("ADMIN_PASSWORD / ADMIN_SECRET are not configured for production");
+  }
   return process.env.ADMIN_SECRET || "matchday-dev-secret";
 }
 

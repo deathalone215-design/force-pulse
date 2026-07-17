@@ -529,7 +529,12 @@ export default function AdminHome() {
       <div className="flex flex-col min-h-screen bg-cream-bg text-deep-forest font-sans">
         <header className="pitch-stripes border-b-4 border-mustard-gold/80 relative overflow-hidden py-10">
           <div className="absolute inset-0 bg-black/20 pointer-events-none" />
-          <div className="max-w-md mx-auto px-4 relative z-10 text-center space-y-2">
+          <div className="max-w-md mx-auto px-4 relative z-10 text-center space-y-3">
+            <img
+              src="/force-pulse-logo.png"
+              alt="FORCE PULSE"
+              className="w-20 h-20 mx-auto rounded-full object-cover border-2 border-mustard-gold/60 shadow-lg bg-white"
+            />
             <div className="inline-flex items-center gap-2 text-mustard-gold font-mono text-[10px] font-bold uppercase tracking-widest">
               <Lock className="w-3.5 h-3.5" />
               Restricted
@@ -596,7 +601,12 @@ export default function AdminHome() {
 
         <div className="max-w-6xl mx-auto px-4 relative z-10 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-1.5 text-mustard-gold font-mono text-[10px] sm:text-xs font-bold uppercase tracking-widest">
+            <div className="flex flex-wrap items-center gap-2 text-mustard-gold font-mono text-[10px] sm:text-xs font-bold uppercase tracking-widest">
+              <img
+                src="/force-pulse-logo.png"
+                alt=""
+                className="w-7 h-7 rounded-full object-cover border border-mustard-gold/50 bg-white"
+              />
               <span>FORCE PULSE</span>
               <span className="text-white/60">•</span>
               <span>Tournament Manager</span>

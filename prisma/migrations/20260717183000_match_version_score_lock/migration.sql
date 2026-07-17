@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "Match" ADD COLUMN "version" INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE "Match" ADD COLUMN "scoreLockId" TEXT;
+ALTER TABLE "Match" ADD COLUMN "scoreLockedAt" TIMESTAMP(3);

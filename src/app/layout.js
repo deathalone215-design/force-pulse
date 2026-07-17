@@ -18,9 +18,40 @@ const robotoMono = Roboto_Mono({
   subsets: ["latin"],
 });
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://forcepulse.vercel.app";
+
 export const metadata = {
+  metadataBase: new URL(siteUrl),
   title: "FORCE PULSE — Tournament Scorer",
   description: "Live scoring and tournament standings tracker.",
+  applicationName: "FORCE PULSE",
+  icons: {
+    icon: [{ url: "/force-pulse-logo.png", type: "image/png" }],
+    apple: [{ url: "/apple-touch-icon.png" }],
+    shortcut: ["/force-pulse-logo.png"],
+  },
+  openGraph: {
+    type: "website",
+    locale: "en_US",
+    url: siteUrl,
+    siteName: "FORCE PULSE",
+    title: "FORCE PULSE — Tournament Scorer",
+    description: "Live scoring and tournament standings tracker.",
+    images: [
+      {
+        url: "/og-logo.png",
+        width: 1200,
+        height: 1200,
+        alt: "FORCE PULSE",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "FORCE PULSE — Tournament Scorer",
+    description: "Live scoring and tournament standings tracker.",
+    images: ["/og-logo.png"],
+  },
 };
 
 export const viewport = {

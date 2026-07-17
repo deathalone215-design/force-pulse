@@ -1,6 +1,15 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { matchMutationSelect } from "@/lib/matchState";
+import {
+  assertWritableLock,
+  buildLockClaimData,
+  buildLockReleaseData,
+  casErrorResponse,
+  casUpdateMatch,
+  parseExpectedVersion,
+  parseLockToken,
+} from "@/lib/matchCas";
 
 function parseElapsedSeconds(body) {
   if (body.elapsedSeconds != null) {
@@ -24,20 +33,31 @@ export async function POST(request, { params }) {
   try {
     const { id } = await params;
     const body = await request.json();
-    const { status, resetClock, stoppageMinutes, clockAction } = body;
+    const { status, resetClock, stoppageMinutes, clockAction, claimLock, releaseLock } =
+      body;
     const elapsedParsed = parseElapsedSeconds(body);
     const hasSetClock = elapsedParsed !== undefined;
+    const expectedVersion = parseExpectedVersion(body);
+    const lockToken = parseLockToken(body);
 
     const hasStatus = status != null;
     const hasStoppage = stoppageMinutes != null;
     const hasReset = Boolean(resetClock);
     const hasClockAction = clockAction === "pause" || clockAction === "resume";
+    const hasLockAction = Boolean(claimLock) || Boolean(releaseLock);
 
-    if (!hasStatus && !hasStoppage && !hasReset && !hasClockAction && !hasSetClock) {
+    if (
+      !hasStatus &&
+      !hasStoppage &&
+      !hasReset &&
+      !hasClockAction &&
+      !hasSetClock &&
+      !hasLockAction
+    ) {
       return NextResponse.json(
         {
           error:
-            "Provide status, stoppageMinutes, resetClock, clockAction, and/or setClock",
+            "Provide status, stoppageMinutes, resetClock, clockAction, setClock, and/or lock action",
         },
         { status: 400 }
       );
@@ -59,14 +79,33 @@ export async function POST(request, { params }) {
         clockPausedAt: true,
         pausedSeconds: true,
         stoppageMinutes: true,
+        version: true,
+        scoreLockId: true,
+        scoreLockedAt: true,
       },
     });
     if (!existing) {
       return NextResponse.json({ error: "Match not found" }, { status: 404 });
     }
 
+    // Lock claim/release can proceed without write lock assert first
+    if (!releaseLock && !claimLock) {
+      assertWritableLock(existing, lockToken);
+    } else if (claimLock) {
+      // claiming: only blocked if someone else holds fresh lock
+    } else {
+      assertWritableLock(existing, lockToken);
+    }
+
     const data = {};
     const now = new Date();
+
+    if (claimLock) {
+      Object.assign(data, buildLockClaimData(existing, lockToken) || {});
+    }
+    if (releaseLock) {
+      Object.assign(data, buildLockReleaseData(existing, lockToken) || {});
+    }
 
     if (hasStatus) {
       const validStatuses = ["SCHEDULED", "LIVE", "COMPLETED"];
@@ -81,6 +120,14 @@ export async function POST(request, { params }) {
           data.clockPausedAt = null;
           data.pausedSeconds = 0;
         }
+        // Auto-claim lock when going live if token present
+        if (lockToken && !claimLock) {
+          try {
+            Object.assign(data, buildLockClaimData(existing, lockToken) || {});
+          } catch {
+            /* already locked by other — assertWritableLock would have thrown */
+          }
+        }
       } else if (status === "SCHEDULED") {
         data.kickoffAt = null;
         data.clockPausedAt = null;
@@ -88,10 +135,14 @@ export async function POST(request, { params }) {
         data.stoppageMinutes = 0;
         data.penaltyScoreA = 0;
         data.penaltyScoreB = 0;
+        data.scoreLockId = null;
+        data.scoreLockedAt = null;
       } else if (status === "COMPLETED") {
         if (existing.kickoffAt && !existing.clockPausedAt) {
           data.clockPausedAt = now;
         }
+        data.scoreLockId = null;
+        data.scoreLockedAt = null;
       }
     }
 
@@ -108,7 +159,6 @@ export async function POST(request, { params }) {
           ? data.clockPausedAt
           : existing.clockPausedAt
       );
-      // Place kickoff so elapsed == elapsedParsed from "now"
       data.kickoffAt = new Date(now.getTime() - elapsedParsed * 1000);
       data.pausedSeconds = 0;
       data.clockPausedAt = keepPaused ? now : null;
@@ -168,14 +218,16 @@ export async function POST(request, { params }) {
       return NextResponse.json(current);
     }
 
-    const updatedMatch = await prisma.match.update({
-      where: { id },
+    const updatedMatch = await casUpdateMatch(prisma, id, {
+      expectedVersion,
       data,
       select: matchMutationSelect,
     });
 
     return NextResponse.json(updatedMatch);
   } catch (error) {
+    const casRes = casErrorResponse(error);
+    if (casRes) return casRes;
     console.error("Failed to update match status:", error);
     return NextResponse.json(
       { error: error.message || "Failed to update match status" },

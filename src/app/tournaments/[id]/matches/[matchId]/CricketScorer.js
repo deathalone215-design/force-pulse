@@ -17,6 +17,11 @@ import {
   oversToMaxBalls,
 } from "@/lib/cricket";
 import { Loader2, Undo2, Zap, Target, TrendingUp } from "lucide-react";
+import {
+  casErrorMessage,
+  casFields,
+  isCasConflict,
+} from "@/lib/matchCasClient";
 
 function playerLabel(p, short = false) {
   if (!p) return "—";
@@ -172,8 +177,22 @@ export default function CricketScorer({
   const api = async (url, options) => {
     setBusy(true);
     try {
+      let body = options.body;
+      if (body && typeof body === "string") {
+        try {
+          body = JSON.stringify({
+            ...JSON.parse(body),
+            ...casFields(match, matchId),
+          });
+        } catch {
+          body = options.body;
+        }
+      } else if (options.method === "DELETE") {
+        body = JSON.stringify(casFields(match, matchId));
+      }
       const res = await fetch(url, {
         ...options,
+        body,
         headers: {
           "Content-Type": "application/json",
           ...(options.headers || {}),
@@ -181,7 +200,12 @@ export default function CricketScorer({
         credentials: "include",
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Request failed");
+      if (!res.ok) {
+        if (isCasConflict(res, data) && data?.match && onMatchUpdate) {
+          onMatchUpdate(data.match);
+        }
+        throw new Error(casErrorMessage(res, data, "Request failed"));
+      }
       if (data.match && onMatchUpdate) {
         onMatchUpdate(data.match);
       } else if (onRefresh) {
@@ -228,13 +252,24 @@ export default function CricketScorer({
       const res = await fetch(`/api/matches/${matchId}/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: s }),
+        body: JSON.stringify({ status: s, ...casFields(match, matchId) }),
         credentials: "include",
         cache: "no-store",
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Failed to update status");
-      if (data?.status && onMatchUpdate) onMatchUpdate({ status: data.status });
+      if (!res.ok) {
+        if (isCasConflict(res, data) && data?.match && onMatchUpdate) {
+          onMatchUpdate(data.match);
+        }
+        throw new Error(casErrorMessage(res, data, "Failed to update status"));
+      }
+      if (data?.status && onMatchUpdate) {
+        onMatchUpdate({
+          status: data.status,
+          version: data.version,
+          updatedAt: data.updatedAt,
+        });
+      }
     } catch (err) {
       alert(err.message);
       if (onRefresh) await onRefresh();

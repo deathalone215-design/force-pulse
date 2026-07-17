@@ -1,6 +1,19 @@
 import { prisma } from "@/lib/prisma";
 import { resolveTournamentPlaceholders } from "@/lib/tournamentResolver";
 
+// Re-export for callers that still import from this module
+export { loadTournamentForLiveBoard } from "@/lib/tournamentLiveBoard";
+
+const teamLiteSelect = {
+  id: true,
+  name: true,
+  logoUrl: true,
+};
+
+/**
+ * Lean admin/scorer include: squads once per team (not nested on every match).
+ * Call attachMatchSquads() after load for scorer UX that needs players on teamA/B.
+ */
 export const categoryDetailInclude = {
   teams: {
     include: {
@@ -12,16 +25,8 @@ export const categoryDetailInclude = {
     include: {
       matches: {
         include: {
-          teamA: {
-            include: {
-              players: true,
-            },
-          },
-          teamB: {
-            include: {
-              players: true,
-            },
-          },
+          teamA: { select: teamLiteSelect },
+          teamB: { select: teamLiteSelect },
           events: {
             include: {
               player: true,
@@ -40,11 +45,34 @@ export const categoryDetailInclude = {
   },
 };
 
+/** Attach category squads onto match teams without duplicating DB reads. */
+export function attachMatchSquads(category) {
+  const byId = Object.fromEntries(
+    (category.teams || []).map((t) => [t.id, t])
+  );
+  for (const round of category.rounds || []) {
+    for (const match of round.matches || []) {
+      const home = byId[match.teamAId];
+      const away = byId[match.teamBId];
+      if (match.teamA && home) {
+        match.teamA = { ...match.teamA, players: home.players || [] };
+      }
+      if (match.teamB && away) {
+        match.teamB = { ...match.teamB, players: away.players || [] };
+      }
+      if (!match.cricketBalls) match.cricketBalls = [];
+    }
+  }
+  return category;
+}
+
 export async function loadCategoryById(categoryId) {
-  return prisma.tournamentCategory.findUnique({
+  const category = await prisma.tournamentCategory.findUnique({
     where: { id: categoryId },
     include: categoryDetailInclude,
   });
+  if (!category) return null;
+  return attachMatchSquads(category);
 }
 
 export async function loadResolvedCategory(categoryId) {
@@ -58,7 +86,7 @@ export async function loadTournamentWithCategories(tournamentId) {
     where: { id: tournamentId },
     include: {
       categories: {
-        orderBy: { name: "asc" },
+        orderBy: [{ sport: "asc" }, { name: "asc" }],
         include: categoryDetailInclude,
       },
     },
@@ -67,7 +95,7 @@ export async function loadTournamentWithCategories(tournamentId) {
   if (!tournament) return null;
 
   tournament.categories = tournament.categories.map((cat) =>
-    resolveTournamentPlaceholders(cat)
+    resolveTournamentPlaceholders(attachMatchSquads(cat))
   );
 
   return tournament;
@@ -83,7 +111,9 @@ export async function findResolvedMatch(matchId) {
 
   if (!matchWithRound) return null;
 
-  const resolvedCategory = await loadResolvedCategory(matchWithRound.round.categoryId);
+  const resolvedCategory = await loadResolvedCategory(
+    matchWithRound.round.categoryId
+  );
   if (!resolvedCategory) return matchWithRound;
 
   for (const r of resolvedCategory.rounds) {

@@ -80,6 +80,9 @@ model Match {
   penaltyScoreB   Int           @default(0) // Penalty shootout scored (team B)
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @default(now()) @updatedAt
+  version         Int           @default(0) // CAS / optimistic concurrency for scorers
+  scoreLockId     String?       // Active scorer device token (optional exclusive lock)
+  scoreLockedAt   DateTime?     // When the score lock was claimed
   // Cricket-specific
   oversLimit      Int?
   currentInnings  Int           @default(1)

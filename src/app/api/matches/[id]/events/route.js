@@ -1,6 +1,13 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { scoresFromEvents, matchMutationSelect } from "@/lib/matchState";
+import {
+  assertWritableLock,
+  casErrorResponse,
+  casUpdateMatch,
+  parseExpectedVersion,
+  parseLockToken,
+} from "@/lib/matchCas";
 
 export async function POST(request, { params }) {
   try {
@@ -8,10 +15,12 @@ export async function POST(request, { params }) {
     const body = await request.json();
 
     if (body?.action === "delete" || body?.delete === true) {
-      return await deleteMatchEvent(matchId, body.eventId);
+      return await deleteMatchEvent(matchId, body);
     }
 
     const { type, teamId, playerId, minute } = body;
+    const expectedVersion = parseExpectedVersion(body);
+    const lockToken = parseLockToken(body);
 
     if (!type) {
       return NextResponse.json({ error: "Event type is required" }, { status: 400 });
@@ -24,6 +33,8 @@ export async function POST(request, { params }) {
     if (!match) {
       return NextResponse.json({ error: "Match not found" }, { status: 404 });
     }
+
+    assertWritableLock(match, lockToken);
 
     const t = String(type).toUpperCase();
 
@@ -49,8 +60,8 @@ export async function POST(request, { params }) {
       });
       const scores = scoresFromEvents(allEvents, match.teamAId, match.teamBId);
 
-      const updatedMatch = await tx.match.update({
-        where: { id: matchId },
+      const updatedMatch = await casUpdateMatch(tx, matchId, {
+        expectedVersion,
         data: scores,
         select: matchMutationSelect,
       });
@@ -60,6 +71,8 @@ export async function POST(request, { params }) {
 
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
+    const casRes = casErrorResponse(error);
+    if (casRes) return casRes;
     console.error("Failed to add/delete match event:", error);
     return NextResponse.json(
       { error: error.message || "Failed to update match event" },
@@ -68,7 +81,11 @@ export async function POST(request, { params }) {
   }
 }
 
-async function deleteMatchEvent(matchId, eventId) {
+async function deleteMatchEvent(matchId, body) {
+  const eventId = body?.eventId;
+  const expectedVersion = parseExpectedVersion(body);
+  const lockToken = parseLockToken(body);
+
   if (!eventId) {
     return NextResponse.json({ error: "Event ID is required" }, { status: 400 });
   }
@@ -89,6 +106,8 @@ async function deleteMatchEvent(matchId, eventId) {
     return NextResponse.json({ error: "Match not found" }, { status: 404 });
   }
 
+  assertWritableLock(match, lockToken);
+
   const result = await prisma.$transaction(async (tx) => {
     await tx.matchEvent.delete({
       where: { id: String(eventId) },
@@ -100,8 +119,8 @@ async function deleteMatchEvent(matchId, eventId) {
     });
     const scores = scoresFromEvents(remaining, match.teamAId, match.teamBId);
 
-    const updatedMatch = await tx.match.update({
-      where: { id: matchId },
+    const updatedMatch = await casUpdateMatch(tx, matchId, {
+      expectedVersion,
       data: scores,
       select: matchMutationSelect,
     });
@@ -119,22 +138,23 @@ async function deleteMatchEvent(matchId, eventId) {
 export async function DELETE(request, { params }) {
   try {
     const { id: matchId } = await params;
-    let eventId = null;
+    let body = {};
     try {
-      const body = await request.json();
-      if (body?.eventId) eventId = String(body.eventId);
+      body = await request.json();
     } catch {
-      /* empty body */
+      body = {};
     }
-    if (!eventId) {
+    if (!body.eventId) {
       try {
-        eventId = new URL(request.url).searchParams.get("eventId");
+        body.eventId = new URL(request.url).searchParams.get("eventId");
       } catch {
-        eventId = null;
+        /* ignore */
       }
     }
-    return await deleteMatchEvent(matchId, eventId);
+    return await deleteMatchEvent(matchId, body);
   } catch (error) {
+    const casRes = casErrorResponse(error);
+    if (casRes) return casRes;
     console.error("Failed to delete match event:", error);
     return NextResponse.json(
       { error: error.message || "Failed to delete match event" },

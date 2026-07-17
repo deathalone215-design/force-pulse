@@ -1,12 +1,27 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { findResolvedMatch } from "@/lib/tournamentData";
+import {
+  assertWritableLock,
+  casErrorResponse,
+  casUpdateMatch,
+  parseExpectedVersion,
+  parseLockToken,
+} from "@/lib/matchCas";
+
+const cricketMatchInclude = {
+  cricketBalls: { orderBy: { createdAt: "asc" } },
+  teamA: { include: { players: true } },
+  teamB: { include: { players: true } },
+};
 
 export async function POST(request, { params }) {
   try {
     const { id: matchId } = await params;
     const body = await request.json();
     const { battingTeamId, strikerId, nonStrikerId, bowlerId } = body;
+    const expectedVersion = parseExpectedVersion(body);
+    const lockToken = parseLockToken(body);
 
     const match = await prisma.match.findUnique({
       where: { id: matchId },
@@ -22,6 +37,8 @@ export async function POST(request, { params }) {
     if (!match) {
       return NextResponse.json({ error: "Match not found" }, { status: 404 });
     }
+
+    assertWritableLock(match, lockToken);
 
     const category = match.round?.category;
     if (category?.sport !== "CRICKET") {
@@ -52,38 +69,36 @@ export async function POST(request, { params }) {
       );
     }
 
-    const oversLimit =
-      match.oversLimit || category.oversPerInnings || null;
+    const oversLimit = match.oversLimit || category.oversPerInnings || null;
 
-    await prisma.cricketBall.deleteMany({ where: { matchId } });
-
-    const updated = await prisma.match.update({
-      where: { id: matchId },
-      data: {
-        status: "LIVE",
-        oversLimit,
-        currentInnings: 1,
-        inningsComplete: 0,
-        battingTeamId,
-        strikerId,
-        nonStrikerId,
-        bowlerId,
-        scoreA: 0,
-        scoreB: 0,
-        wicketsA: 0,
-        wicketsB: 0,
-        ballsFacedA: 0,
-        ballsFacedB: 0,
-      },
-      include: {
-        cricketBalls: { orderBy: { createdAt: "asc" } },
-        teamA: { include: { players: true } },
-        teamB: { include: { players: true } },
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.cricketBall.deleteMany({ where: { matchId } });
+      return casUpdateMatch(tx, matchId, {
+        expectedVersion,
+        data: {
+          status: "LIVE",
+          oversLimit,
+          currentInnings: 1,
+          inningsComplete: 0,
+          battingTeamId,
+          strikerId,
+          nonStrikerId,
+          bowlerId,
+          scoreA: 0,
+          scoreB: 0,
+          wicketsA: 0,
+          wicketsB: 0,
+          ballsFacedA: 0,
+          ballsFacedB: 0,
+        },
+        include: cricketMatchInclude,
+      });
     });
 
     return NextResponse.json({ match: updated });
   } catch (error) {
+    const casRes = casErrorResponse(error);
+    if (casRes) return casRes;
     console.error("Failed to start cricket match:", error);
     return NextResponse.json({ error: "Failed to start match" }, { status: 500 });
   }

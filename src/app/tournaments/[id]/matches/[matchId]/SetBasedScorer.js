@@ -3,6 +3,11 @@
 import { useState, useCallback } from "react";
 import { Loader2, Undo2, CheckCircle2 } from "lucide-react";
 import { SPORT_CONFIGS, getSetTarget, getSetWinner } from "@/lib/setBasedSports";
+import {
+  casErrorMessage,
+  casFields,
+  isCasConflict,
+} from "@/lib/matchCasClient";
 
 function TeamCrest({ team, size = "lg" }) {
   const sizeClass =
@@ -91,11 +96,14 @@ export default function SetBasedScorer({
         const res = await fetch(`/api/matches/${matchId}/set-point`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ team }),
+          body: JSON.stringify({ team, ...casFields(match, matchId) }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          alert(data.error || "Failed to add point");
+          if (isCasConflict(res, data) && data?.match && onMatchUpdate) {
+            onMatchUpdate(data.match);
+          }
+          alert(casErrorMessage(res, data, "Failed to add point"));
           return;
         }
         await applyResponse(data);
@@ -103,7 +111,7 @@ export default function SetBasedScorer({
         setLoading(false);
       }
     },
-    [loading, isCompleted, matchId, applyResponse]
+    [loading, isCompleted, matchId, match, applyResponse, onMatchUpdate]
   );
 
   const undoPoint = useCallback(
@@ -113,10 +121,15 @@ export default function SetBasedScorer({
       try {
         const res = await fetch(`/api/matches/${matchId}/set-point?team=${team}`, {
           method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(casFields(match, matchId)),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          alert(data.error || "Failed to undo");
+          if (isCasConflict(res, data) && data?.match && onMatchUpdate) {
+            onMatchUpdate(data.match);
+          }
+          alert(casErrorMessage(res, data, "Failed to undo"));
           return;
         }
         await applyResponse(data);
@@ -124,7 +137,7 @@ export default function SetBasedScorer({
         setLoading(false);
       }
     },
-    [loading, matchId, applyResponse]
+    [loading, matchId, match, applyResponse, onMatchUpdate]
   );
 
   const updateStatus = async (newStatus) => {
@@ -134,13 +147,27 @@ export default function SetBasedScorer({
       const res = await fetch(`/api/matches/${matchId}/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus }),
+        body: JSON.stringify({
+          status: newStatus,
+          ...casFields(match, matchId),
+        }),
         credentials: "include",
         cache: "no-store",
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Failed to update status");
-      if (data?.status && onMatchUpdate) onMatchUpdate({ status: data.status });
+      if (!res.ok) {
+        if (isCasConflict(res, data) && data?.match && onMatchUpdate) {
+          onMatchUpdate(data.match);
+        }
+        throw new Error(casErrorMessage(res, data, "Failed to update status"));
+      }
+      if (data?.status && onMatchUpdate) {
+        onMatchUpdate({
+          status: data.status,
+          version: data.version,
+          updatedAt: data.updatedAt,
+        });
+      }
     } catch (err) {
       alert(err.message);
       if (onRefresh) await onRefresh();

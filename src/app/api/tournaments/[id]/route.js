@@ -1,22 +1,52 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import { loadTournamentWithCategories } from "@/lib/tournamentData";
 import { parseCategoryInputs } from "@/lib/sports";
+import { loadTournamentWithCategories } from "@/lib/tournamentData";
+import {
+  loadLiveBoardDelta,
+  loadTournamentForLiveBoard,
+} from "@/lib/tournamentLiveBoard";
 
 export async function GET(request, { params }) {
   try {
     const { id } = await params;
-    const tournament = await loadTournamentWithCategories(id);
+    const url = new URL(request.url);
+    const view = url.searchParams.get("view");
+    const since = url.searchParams.get("since");
+
+    if (view === "delta") {
+      const delta = await loadLiveBoardDelta(id, since);
+      if (!delta) {
+        return NextResponse.json({ error: "Tournament not found" }, { status: 404 });
+      }
+      return NextResponse.json(delta, {
+        headers: {
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+        },
+      });
+    }
+
+    const tournament =
+      view === "live"
+        ? await loadTournamentForLiveBoard(id)
+        : await loadTournamentWithCategories(id);
 
     if (!tournament) {
       return NextResponse.json({ error: "Tournament not found" }, { status: 404 });
     }
 
-    return NextResponse.json(tournament, {
-      headers: {
-        "Cache-Control": "no-store, no-cache, must-revalidate",
-      },
-    });
+    // Live board snapshot: short cache OK; deltas stay no-store
+    const cacheHeaders =
+      view === "live"
+        ? {
+            "Cache-Control":
+              "public, max-age=2, s-maxage=3, stale-while-revalidate=10",
+          }
+        : {
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+          };
+
+    return NextResponse.json(tournament, { headers: cacheHeaders });
   } catch (error) {
     console.error("Failed to fetch tournament:", error?.message || error);
     return NextResponse.json(

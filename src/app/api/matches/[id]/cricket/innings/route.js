@@ -1,17 +1,27 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { findResolvedMatch } from "@/lib/tournamentData";
+import {
+  assertWritableLock,
+  casErrorResponse,
+  casUpdateMatch,
+  parseExpectedVersion,
+  parseLockToken,
+} from "@/lib/matchCas";
 
 export async function POST(request, { params }) {
   try {
     const { id: matchId } = await params;
     const body = await request.json();
     const { strikerId, nonStrikerId, bowlerId } = body;
+    const expectedVersion = parseExpectedVersion(body);
+    const lockToken = parseLockToken(body);
 
     const match = await prisma.match.findUnique({ where: { id: matchId } });
     if (!match) {
       return NextResponse.json({ error: "Match not found" }, { status: 404 });
     }
+    assertWritableLock(match, lockToken);
     if (match.status !== "LIVE") {
       return NextResponse.json({ error: "Match is not live" }, { status: 400 });
     }
@@ -40,8 +50,8 @@ export async function POST(request, { params }) {
     const chasingTeamId =
       match.battingTeamId === teamAId ? teamBId : teamAId;
 
-    const updated = await prisma.match.update({
-      where: { id: matchId },
+    const updated = await casUpdateMatch(prisma, matchId, {
+      expectedVersion,
       data: {
         currentInnings: 2,
         battingTeamId: chasingTeamId,
@@ -58,6 +68,8 @@ export async function POST(request, { params }) {
 
     return NextResponse.json({ match: updated });
   } catch (error) {
+    const casRes = casErrorResponse(error);
+    if (casRes) return casRes;
     console.error("Failed to start second innings:", error);
     return NextResponse.json({ error: "Failed to start innings" }, { status: 500 });
   }

@@ -28,6 +28,12 @@ import {
   stripDeletedEvents,
   shouldAcceptServerMatch,
 } from "@/lib/matchState";
+import {
+  casErrorMessage,
+  casFields,
+  getScoreLockToken,
+  isCasConflict,
+} from "@/lib/matchCasClient";
 
 const getRoundName = (number, totalRounds, format) =>
   getRoundDisplayName(number, totalRounds, format);
@@ -263,6 +269,44 @@ export default function MatchScorerPage() {
     }
   }, []);
 
+  const lockClaimedRef = useRef(false);
+  useEffect(() => {
+    if (!matchId || !match || lockClaimedRef.current) return undefined;
+    const token = getScoreLockToken(matchId);
+    if (!token) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/matches/${matchId}/status`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          cache: "no-store",
+          body: JSON.stringify({
+            claimLock: true,
+            ...casFields(match, matchId),
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (res.ok && data?.id) {
+          lockClaimedRef.current = true;
+          applyMatchUpdate({
+            version: data.version,
+            scoreLockId: data.scoreLockId,
+            scoreLockedAt: data.scoreLockedAt,
+            updatedAt: data.updatedAt,
+          });
+        }
+      } catch {
+        /* lock is best-effort */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [matchId, match, applyMatchUpdate]);
+
   const updateMatchStatus = async (newStatus, { resetClock = false } = {}) => {
     if (updatingStatus) return;
     if (match?.status === newStatus && !resetClock) return;
@@ -293,12 +337,21 @@ export default function MatchScorerPage() {
         const res = await fetch(`/api/matches/${matchId}/status`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: newStatus, resetClock }),
+          body: JSON.stringify({
+            status: newStatus,
+            resetClock,
+            ...casFields(match, matchId),
+          }),
           credentials: "include",
           cache: "no-store",
         });
         const data = await res.json().catch(() => null);
-        if (!res.ok) throw new Error(data?.error || "Failed to update status");
+        if (!res.ok) {
+          if (isCasConflict(res, data) && data?.match) {
+            applyMatchUpdate(data.match);
+          }
+          throw new Error(casErrorMessage(res, data, "Failed to update status"));
+        }
         if (data?.status || data?.id) {
           const patch = {
             status: data.status || newStatus,
@@ -310,6 +363,9 @@ export default function MatchScorerPage() {
             clockPausedAt: data.clockPausedAt,
             pausedSeconds: data.pausedSeconds,
             updatedAt: data.updatedAt,
+            version: data.version,
+            scoreLockId: data.scoreLockId,
+            scoreLockedAt: data.scoreLockedAt,
           };
           if (data.kickoffAt != null || newStatus === "SCHEDULED") {
             patch.kickoffAt = data.kickoffAt ?? null;
@@ -358,18 +414,22 @@ export default function MatchScorerPage() {
         const res = await fetch(`/api/matches/${matchId}/status`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ setClock: raw }),
+          body: JSON.stringify({ setClock: raw, ...casFields(match, matchId) }),
           credentials: "include",
           cache: "no-store",
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "Could not set time");
+        if (!res.ok) {
+          if (isCasConflict(res, data) && data?.match) applyMatchUpdate(data.match);
+          throw new Error(casErrorMessage(res, data, "Could not set time"));
+        }
         applyMatchUpdate({
           kickoffAt: data.kickoffAt,
           clockPausedAt: data.clockPausedAt,
           pausedSeconds: data.pausedSeconds,
           status: data.status || "LIVE",
           updatedAt: data.updatedAt,
+          version: data.version,
         });
         setClockNow(Date.now());
         setEditingClock(false);
@@ -390,18 +450,25 @@ export default function MatchScorerPage() {
         const res = await fetch(`/api/matches/${matchId}/status`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stoppageMinutes: n }),
+          body: JSON.stringify({
+            stoppageMinutes: n,
+            ...casFields(match, matchId),
+          }),
           credentials: "include",
           cache: "no-store",
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "Failed to set stoppage");
+        if (!res.ok) {
+          if (isCasConflict(res, data) && data?.match) applyMatchUpdate(data.match);
+          throw new Error(casErrorMessage(res, data, "Failed to set stoppage"));
+        }
         if (data.stoppageMinutes != null) {
           applyMatchUpdate({
             stoppageMinutes: data.stoppageMinutes,
             clockPausedAt: data.clockPausedAt,
             pausedSeconds: data.pausedSeconds,
             updatedAt: data.updatedAt,
+            version: data.version,
           });
         }
       } catch (err) {
@@ -436,18 +503,25 @@ export default function MatchScorerPage() {
         const res = await fetch(`/api/matches/${matchId}/status`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clockAction: action }),
+          body: JSON.stringify({
+            clockAction: action,
+            ...casFields(match, matchId),
+          }),
           credentials: "include",
           cache: "no-store",
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || `Failed to ${action} clock`);
+        if (!res.ok) {
+          if (isCasConflict(res, data) && data?.match) applyMatchUpdate(data.match);
+          throw new Error(casErrorMessage(res, data, `Failed to ${action} clock`));
+        }
         applyMatchUpdate({
           clockPausedAt: data.clockPausedAt ?? null,
           pausedSeconds: data.pausedSeconds ?? 0,
           kickoffAt: data.kickoffAt,
           status: data.status,
           updatedAt: data.updatedAt,
+          version: data.version,
         });
         if (action === "resume") setClockNow(Date.now());
       } catch (err) {
@@ -495,11 +569,17 @@ export default function MatchScorerPage() {
             minute: eventMinute
               ? parseInt(eventMinute, 10)
               : suggestedMinute,
+            ...casFields(match, matchId),
           }),
         });
 
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "Failed to record event");
+        if (!res.ok) {
+          if (isCasConflict(res, data) && data?.match) {
+            applyMatchUpdate(data.match);
+          }
+          throw new Error(casErrorMessage(res, data, "Failed to record event"));
+        }
 
         if (data.match) {
           applyMatchUpdate(data.match, { addEvent: data.event });
@@ -554,10 +634,19 @@ export default function MatchScorerPage() {
           headers: { "Content-Type": "application/json" },
           credentials: "include",
           cache: "no-store",
-          body: JSON.stringify({ action: "delete", eventId }),
+          body: JSON.stringify({
+            action: "delete",
+            eventId,
+            ...casFields(match, matchId),
+          }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "Failed to delete event");
+        if (!res.ok) {
+          if (isCasConflict(res, data) && data?.match) {
+            applyMatchUpdate(data.match);
+          }
+          throw new Error(casErrorMessage(res, data, "Failed to delete event"));
+        }
         if (data.match) {
           applyMatchUpdate(
             {
@@ -566,6 +655,7 @@ export default function MatchScorerPage() {
               penaltyScoreA: data.match.penaltyScoreA,
               penaltyScoreB: data.match.penaltyScoreB,
               updatedAt: data.match.updatedAt,
+              version: data.match.version,
             },
             { removeEventId: eventId }
           );

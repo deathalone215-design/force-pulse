@@ -1,5 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import {
+  assertWritableLock,
+  casErrorResponse,
+  casUpdateMatch,
+  parseExpectedVersion,
+  parseLockToken,
+} from "@/lib/matchCas";
 
 /** PATCH: set new batsman after wicket and/or change bowler */
 export async function PATCH(request, { params }) {
@@ -7,11 +14,14 @@ export async function PATCH(request, { params }) {
     const { id: matchId } = await params;
     const body = await request.json();
     const { strikerId, nonStrikerId, bowlerId } = body;
+    const expectedVersion = parseExpectedVersion(body);
+    const lockToken = parseLockToken(body);
 
     const match = await prisma.match.findUnique({ where: { id: matchId } });
     if (!match) {
       return NextResponse.json({ error: "Match not found" }, { status: 404 });
     }
+    assertWritableLock(match, lockToken);
     if (match.status !== "LIVE") {
       return NextResponse.json({ error: "Match is not live" }, { status: 400 });
     }
@@ -28,8 +38,8 @@ export async function PATCH(request, { params }) {
       );
     }
 
-    const updated = await prisma.match.update({
-      where: { id: matchId },
+    const updated = await casUpdateMatch(prisma, matchId, {
+      expectedVersion,
       data,
       include: {
         cricketBalls: { orderBy: { createdAt: "asc" } },
@@ -40,6 +50,8 @@ export async function PATCH(request, { params }) {
 
     return NextResponse.json({ match: updated });
   } catch (error) {
+    const casRes = casErrorResponse(error);
+    if (casRes) return casRes;
     console.error("Failed to update cricket players:", error);
     return NextResponse.json({ error: "Failed to update players" }, { status: 500 });
   }

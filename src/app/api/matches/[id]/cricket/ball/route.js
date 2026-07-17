@@ -1,6 +1,5 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-
 export const dynamic = "force-dynamic";
 import {
   ballsToOvers,
@@ -13,6 +12,13 @@ import {
   shouldSwapStrike,
   strikeRotationRuns,
 } from "@/lib/cricket";
+import {
+  assertWritableLock,
+  casErrorResponse,
+  casUpdateMatch,
+  parseExpectedVersion,
+  parseLockToken,
+} from "@/lib/matchCas";
 
 function loadMatch(matchId) {
   return prisma.match.findUnique({
@@ -34,6 +40,8 @@ export async function POST(request, { params }) {
   try {
     const { id: matchId } = await params;
     const body = await request.json();
+    const expectedVersion = parseExpectedVersion(body);
+    const lockToken = parseLockToken(body);
     const {
       runsOffBat = 0,
       extras = 0,
@@ -48,6 +56,7 @@ export async function POST(request, { params }) {
     if (!match) {
       return NextResponse.json({ error: "Match not found" }, { status: 404 });
     }
+    assertWritableLock(match, lockToken);
     if (match.round?.category?.sport !== "CRICKET") {
       return NextResponse.json({ error: "Not a cricket match" }, { status: 400 });
     }
@@ -182,49 +191,37 @@ export async function POST(request, { params }) {
         bowlerId,
       };
 
-      let updated = await tx.match.update({
-        where: { id: matchId },
-        data,
-      });
-
-      // Chase complete?
+      // Preview completion against provisional scores
+      const provisional = { ...match, ...data };
       if (match.currentInnings === 2) {
         const chasingRuns = isA ? data.scoreA : data.scoreB;
         const target =
           (match.battingTeamId === match.teamAId ? match.scoreB : match.scoreA) + 1;
         if (chasingRuns >= target) {
-          updated = await tx.match.update({
-            where: { id: matchId },
-            data: {
-              status: "COMPLETED",
-              inningsComplete: 2,
-            },
-          });
+          data.status = "COMPLETED";
+          data.inningsComplete = 2;
         }
       }
 
-      // Innings complete by wickets/overs?
-      if (updated.status === "LIVE" && isInningsComplete(updated, match.battingTeamId)) {
+      if (
+        (data.status || match.status) === "LIVE" &&
+        isInningsComplete({ ...provisional, ...data }, match.battingTeamId)
+      ) {
         if (match.currentInnings === 1) {
-          updated = await tx.match.update({
-            where: { id: matchId },
-            data: {
-              inningsComplete: 1,
-              strikerId: null,
-              nonStrikerId: null,
-              bowlerId: null,
-            },
-          });
-        } else {
-          updated = await tx.match.update({
-            where: { id: matchId },
-            data: {
-              status: "COMPLETED",
-              inningsComplete: 2,
-            },
-          });
+          data.inningsComplete = 1;
+          data.strikerId = null;
+          data.nonStrikerId = null;
+          data.bowlerId = null;
+        } else if (data.status !== "COMPLETED") {
+          data.status = "COMPLETED";
+          data.inningsComplete = 2;
         }
       }
+
+      await casUpdateMatch(tx, matchId, {
+        expectedVersion,
+        data,
+      });
 
       const full = await tx.match.findUnique({
         where: { id: matchId },
@@ -238,6 +235,8 @@ export async function POST(request, { params }) {
 
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
+    const casRes = casErrorResponse(error);
+    if (casRes) return casRes;
     console.error("Failed to add cricket ball:", error);
     return NextResponse.json({ error: "Failed to add ball" }, { status: 500 });
   }
@@ -248,11 +247,27 @@ export async function DELETE(request, { params }) {
     const { id: matchId } = await params;
     const { searchParams } = new URL(request.url);
     let ballId = searchParams.get("ballId");
+    let expectedVersion = searchParams.get("expectedVersion");
+    let lockToken = searchParams.get("lockToken");
+    try {
+      const body = await request.json();
+      if (body?.ballId) ballId = body.ballId;
+      if (body?.expectedVersion != null) expectedVersion = body.expectedVersion;
+      if (body?.lockToken) lockToken = body.lockToken;
+    } catch {
+      /* no body */
+    }
+    expectedVersion =
+      expectedVersion != null && expectedVersion !== ""
+        ? parseInt(expectedVersion, 10)
+        : null;
+    if (!Number.isFinite(expectedVersion)) expectedVersion = null;
 
     const match = await loadMatch(matchId);
     if (!match) {
       return NextResponse.json({ error: "Match not found" }, { status: 404 });
     }
+    assertWritableLock(match, lockToken);
 
     const balls = match.cricketBalls || [];
     if (balls.length === 0) {
@@ -268,7 +283,6 @@ export async function DELETE(request, { params }) {
       return NextResponse.json({ error: "Ball not found" }, { status: 404 });
     }
 
-    // Only allow undo of last ball for safety
     const last = balls[balls.length - 1];
     if (ballId !== last.id) {
       return NextResponse.json(
@@ -277,14 +291,10 @@ export async function DELETE(request, { params }) {
       );
     }
 
-    await prisma.cricketBall.delete({ where: { id: ballId } });
-
     const remaining = balls.slice(0, -1);
     const totals = recomputeFromBalls(match, remaining);
 
-    // Rebuild live state from remaining balls
     let currentInnings = 1;
-    let inningsComplete = 0;
     let battingTeamId = null;
     let strikerId = null;
     let nonStrikerId = null;
@@ -292,10 +302,8 @@ export async function DELETE(request, { params }) {
     let status = match.status === "COMPLETED" ? "LIVE" : match.status;
 
     if (remaining.length === 0) {
-      // Keep status LIVE but clear lineup — admin should restart or re-set
       battingTeamId = match.battingTeamId;
       status = "LIVE";
-      inningsComplete = 0;
       currentInnings = 1;
     } else {
       const lastBall = remaining[remaining.length - 1];
@@ -305,7 +313,8 @@ export async function DELETE(request, { params }) {
       nonStrikerId = lastBall.nonStrikerId;
       bowlerId = lastBall.bowlerId;
 
-      const inn1Done = remaining.some((b) => b.innings === 1) &&
+      const inn1Done =
+        remaining.some((b) => b.innings === 1) &&
         !remaining.some((b) => b.innings === 2)
           ? (() => {
               const mock = {
@@ -320,55 +329,55 @@ export async function DELETE(request, { params }) {
 
       if (remaining.some((b) => b.innings === 2)) {
         currentInnings = 2;
-        inningsComplete = 1;
         battingTeamId = lastBall.battingTeamId;
       } else if (inn1Done) {
         currentInnings = 1;
-        inningsComplete = 1;
         battingTeamId = remaining.find((b) => b.innings === 1).battingTeamId;
         strikerId = null;
         nonStrikerId = null;
         bowlerId = null;
       } else {
-        inningsComplete = 0;
         currentInnings = 1;
       }
 
-      // Re-apply strike after last ball for continuity
-      // Prefer last ball's post-state approximation: striker from last delivery
       status = "LIVE";
     }
 
-    void inningsComplete;
+    const inningsComplete = remaining.some((b) => b.innings === 2)
+      ? 1
+      : remaining.length > 0 &&
+          isInningsComplete(
+            { ...match, ...totals, oversLimit: match.oversLimit },
+            remaining[remaining.length - 1].battingTeamId
+          ) &&
+          !remaining.some((b) => b.innings === 2)
+        ? 1
+        : 0;
 
-    const updated = await prisma.match.update({
-      where: { id: matchId },
-      data: {
-        ...totals,
-        currentInnings,
-        inningsComplete: remaining.some((b) => b.innings === 2)
-          ? 1
-          : remaining.length > 0 &&
-              isInningsComplete(
-                { ...match, ...totals, oversLimit: match.oversLimit },
-                remaining[remaining.length - 1].battingTeamId
-              ) &&
-              !remaining.some((b) => b.innings === 2)
-            ? 1
-            : 0,
-        battingTeamId: battingTeamId || match.battingTeamId,
-        strikerId,
-        nonStrikerId,
-        bowlerId,
-        status,
-      },
-      include: {
-        cricketBalls: { orderBy: { createdAt: "asc" } },
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.cricketBall.delete({ where: { id: ballId } });
+      return casUpdateMatch(tx, matchId, {
+        expectedVersion,
+        data: {
+          ...totals,
+          currentInnings,
+          inningsComplete,
+          battingTeamId: battingTeamId || match.battingTeamId,
+          strikerId,
+          nonStrikerId,
+          bowlerId,
+          status,
+        },
+        include: {
+          cricketBalls: { orderBy: { createdAt: "asc" } },
+        },
+      });
     });
 
     return NextResponse.json({ match: updated });
   } catch (error) {
+    const casRes = casErrorResponse(error);
+    if (casRes) return casRes;
     console.error("Failed to undo cricket ball:", error);
     return NextResponse.json({ error: "Failed to undo ball" }, { status: 500 });
   }
