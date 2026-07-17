@@ -1,11 +1,16 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import { findResolvedMatch } from "@/lib/tournamentData";
+import { scoresFromEvents, matchMutationSelect } from "@/lib/matchState";
 
 export async function POST(request, { params }) {
   try {
     const { id: matchId } = await params;
     const body = await request.json();
+
+    if (body?.action === "delete" || body?.delete === true) {
+      return await deleteMatchEvent(matchId, body.eventId);
+    }
+
     const { type, teamId, playerId, minute } = body;
 
     if (!type) {
@@ -20,9 +25,7 @@ export async function POST(request, { params }) {
       return NextResponse.json({ error: "Match not found" }, { status: 404 });
     }
 
-    const resolvedMatch = await findResolvedMatch(matchId);
-    const teamAId = resolvedMatch ? resolvedMatch.teamAId : match.teamAId;
-    const teamBId = resolvedMatch ? resolvedMatch.teamBId : match.teamBId;
+    const t = String(type).toUpperCase();
 
     const result = await prisma.$transaction(async (tx) => {
       const event = await tx.matchEvent.create({
@@ -30,37 +33,26 @@ export async function POST(request, { params }) {
           matchId,
           teamId,
           playerId,
-          type,
-          minute: minute ? parseInt(minute, 10) : null,
+          type: t,
+          minute: minute != null && minute !== "" ? parseInt(minute, 10) : null,
         },
         include: {
-          player: true,
+          player: {
+            select: { id: true, name: true, shirtNumber: true, teamId: true },
+          },
         },
       });
 
-      let newScoreA = match.scoreA;
-      let newScoreB = match.scoreB;
-
-      if (type === "GOAL") {
-        if (teamId === teamAId) {
-          newScoreA += 1;
-        } else if (teamId === teamBId) {
-          newScoreB += 1;
-        }
-      } else if (type === "OWN_GOAL") {
-        if (teamId === teamAId) {
-          newScoreB += 1;
-        } else if (teamId === teamBId) {
-          newScoreA += 1;
-        }
-      }
+      const allEvents = await tx.matchEvent.findMany({
+        where: { matchId },
+        select: { type: true, teamId: true },
+      });
+      const scores = scoresFromEvents(allEvents, match.teamAId, match.teamBId);
 
       const updatedMatch = await tx.match.update({
         where: { id: matchId },
-        data: {
-          scoreA: newScoreA,
-          scoreB: newScoreB,
-        },
+        data: scores,
+        select: matchMutationSelect,
       });
 
       return { event, match: updatedMatch };
@@ -68,73 +60,85 @@ export async function POST(request, { params }) {
 
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
-    console.error("Failed to add match event:", error);
-    return NextResponse.json({ error: "Failed to add match event" }, { status: 500 });
+    console.error("Failed to add/delete match event:", error);
+    return NextResponse.json(
+      { error: error.message || "Failed to update match event" },
+      { status: 500 }
+    );
   }
+}
+
+async function deleteMatchEvent(matchId, eventId) {
+  if (!eventId) {
+    return NextResponse.json({ error: "Event ID is required" }, { status: 400 });
+  }
+
+  const event = await prisma.matchEvent.findFirst({
+    where: { id: String(eventId), matchId },
+  });
+
+  if (!event) {
+    return NextResponse.json({ error: "Event not found" }, { status: 404 });
+  }
+
+  const match = await prisma.match.findUnique({
+    where: { id: matchId },
+  });
+
+  if (!match) {
+    return NextResponse.json({ error: "Match not found" }, { status: 404 });
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.matchEvent.delete({
+      where: { id: String(eventId) },
+    });
+
+    const remaining = await tx.matchEvent.findMany({
+      where: { matchId },
+      select: { type: true, teamId: true },
+    });
+    const scores = scoresFromEvents(remaining, match.teamAId, match.teamBId);
+
+    const updatedMatch = await tx.match.update({
+      where: { id: matchId },
+      data: scores,
+      select: matchMutationSelect,
+    });
+
+    return {
+      message: "Event deleted",
+      match: updatedMatch,
+      eventId: String(eventId),
+    };
+  });
+
+  return NextResponse.json(result);
 }
 
 export async function DELETE(request, { params }) {
   try {
     const { id: matchId } = await params;
-    const { searchParams } = new URL(request.url);
-    const eventId = searchParams.get("eventId");
-
+    let eventId = null;
+    try {
+      const body = await request.json();
+      if (body?.eventId) eventId = String(body.eventId);
+    } catch {
+      /* empty body */
+    }
     if (!eventId) {
-      return NextResponse.json({ error: "Event ID is required" }, { status: 400 });
-    }
-
-    const match = await prisma.match.findUnique({
-      where: { id: matchId },
-    });
-
-    const event = await prisma.matchEvent.findUnique({
-      where: { id: eventId },
-    });
-
-    if (!match || !event) {
-      return NextResponse.json({ error: "Match or Event not found" }, { status: 404 });
-    }
-
-    const resolvedMatch = await findResolvedMatch(matchId);
-    const teamAId = resolvedMatch ? resolvedMatch.teamAId : match.teamAId;
-    const teamBId = resolvedMatch ? resolvedMatch.teamBId : match.teamBId;
-
-    const result = await prisma.$transaction(async (tx) => {
-      await tx.matchEvent.delete({
-        where: { id: eventId },
-      });
-
-      let newScoreA = match.scoreA;
-      let newScoreB = match.scoreB;
-
-      if (event.type === "GOAL") {
-        if (event.teamId === teamAId) {
-          newScoreA = Math.max(0, newScoreA - 1);
-        } else if (event.teamId === teamBId) {
-          newScoreB = Math.max(0, newScoreB - 1);
-        }
-      } else if (event.type === "OWN_GOAL") {
-        if (event.teamId === teamAId) {
-          newScoreB = Math.max(0, newScoreB - 1);
-        } else if (event.teamId === teamBId) {
-          newScoreA = Math.max(0, newScoreA - 1);
-        }
+      try {
+        eventId = new URL(request.url).searchParams.get("eventId");
+      } catch {
+        eventId = null;
       }
-
-      const updatedMatch = await tx.match.update({
-        where: { id: matchId },
-        data: {
-          scoreA: newScoreA,
-          scoreB: newScoreB,
-        },
-      });
-
-      return { message: "Event deleted", match: updatedMatch };
-    });
-
-    return NextResponse.json(result);
+    }
+    return await deleteMatchEvent(matchId, eventId);
   } catch (error) {
     console.error("Failed to delete match event:", error);
-    return NextResponse.json({ error: "Failed to delete match event" }, { status: 500 });
+    return NextResponse.json(
+      { error: error.message || "Failed to delete match event" },
+      { status: 500 }
+    );
   }
 }

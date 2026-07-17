@@ -1,5 +1,6 @@
 import { Anton, Work_Sans, Roboto_Mono } from "next/font/google";
 import "./globals.css";
+import CapacitorInit from "@/components/CapacitorInit";
 
 const anton = Anton({
   variable: "--font-anton",
@@ -36,6 +37,7 @@ export default function RootLayout({ children }) {
       className={`${anton.variable} ${workSans.variable} ${robotoMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-cream-bg text-deep-forest font-sans overflow-x-hidden">
+        <CapacitorInit />
         {children}
       </body>
     </html>

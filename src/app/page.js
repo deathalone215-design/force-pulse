@@ -12,6 +12,7 @@ import {
   Radio,
   Activity,
 } from "lucide-react";
+import { categoryDisplayName } from "@/lib/sports";
 import {
   hasTournamentDayStarted,
   isTournamentLiveNow,
@@ -79,18 +80,21 @@ function TournamentCard({ t, mode }) {
               {t.name}
             </h3>
             <div className="flex flex-wrap gap-1 mt-1.5">
-              <span className="inline-flex items-center text-[9px] font-mono font-bold uppercase tracking-wider text-deep-forest bg-[#0d472c]/10 border border-[#0d472c]/20 rounded-md px-1.5 py-0.5">
-                {t.sport === "CRICKET"
-                  ? `Cricket · ${t.oversPerInnings || "?"} ov`
-                  : "Football"}
-              </span>
+              {(t.sportLabels || t.sports || []).map((label) => (
+                <span
+                  key={label}
+                  className="inline-flex items-center text-[9px] font-mono font-bold uppercase tracking-wider text-deep-forest bg-[#0d472c]/10 border border-[#0d472c]/20 rounded-md px-1.5 py-0.5"
+                >
+                  {label}
+                </span>
+              ))}
               {(t.categories || []).map((c) => (
                 <span
                   key={c.id}
                   className="inline-flex items-center gap-1 text-[9px] font-mono font-bold uppercase tracking-wider text-mustard-gold-hover bg-mustard-gold/15 border border-mustard-gold/40 rounded-md px-1.5 py-0.5"
                 >
                   <Tags className="w-2.5 h-2.5" />
-                  {c.name}
+                  {categoryDisplayName(c)}
                 </span>
               ))}
             </div>

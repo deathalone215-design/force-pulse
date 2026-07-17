@@ -23,8 +23,8 @@ export async function POST(request, { params }) {
       return NextResponse.json({ error: "Match not found" }, { status: 404 });
     }
 
-    const tournament = match.round?.category?.tournament;
-    if (tournament?.sport !== "CRICKET") {
+    const category = match.round?.category;
+    if (category?.sport !== "CRICKET") {
       return NextResponse.json({ error: "Not a cricket match" }, { status: 400 });
     }
 
@@ -53,7 +53,7 @@ export async function POST(request, { params }) {
     }
 
     const oversLimit =
-      match.oversLimit || tournament.oversPerInnings || null;
+      match.oversLimit || category.oversPerInnings || null;
 
     await prisma.cricketBall.deleteMany({ where: { matchId } });
 

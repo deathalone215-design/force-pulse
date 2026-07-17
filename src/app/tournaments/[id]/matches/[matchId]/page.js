@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useTransition } from "react";
+import { useState, useEffect, useCallback, useTransition, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -11,16 +11,26 @@ import {
   Trash2,
 } from "lucide-react";
 import CricketScorer from "./CricketScorer";
+import SetBasedScorer from "./SetBasedScorer";
+import { isSetBasedSport } from "@/lib/setBasedSports";
+import { getRoundDisplayName } from "@/lib/scheduleFormats";
+import {
+  formatFootballClock,
+  footballElapsedSeconds,
+  footballMatchMinute,
+  footballClockOpts,
+  isFootballClockPaused,
+  formatEventMinute,
+} from "@/lib/footballClock";
+import {
+  mergeMatchFromApi,
+  patchMatchInTournament,
+  stripDeletedEvents,
+  shouldAcceptServerMatch,
+} from "@/lib/matchState";
 
-const getRoundName = (number, totalRounds) => {
-  if (totalRounds === 4) {
-    if (number === 1) return "Saturday League";
-    if (number === 2) return "Sunday League";
-    if (number === 3) return "Semi-Finals";
-    if (number === 4) return "Final";
-  }
-  return `Round ${number}`;
-};
+const getRoundName = (number, totalRounds, format) =>
+  getRoundDisplayName(number, totalRounds, format);
 
 const getTeamGradient = (name) => {
   if (!name) return "linear-gradient(135deg, #334155, #0f172a)";
@@ -89,17 +99,44 @@ export default function MatchScorerPage() {
   const [eventPlayerId, setEventPlayerId] = useState("");
   const [eventMinute, setEventMinute] = useState("");
   const [selectedEventTeamId, setSelectedEventTeamId] = useState("");
+  const [clockNow, setClockNow] = useState(() => Date.now());
+  const [resettingClock, setResettingClock] = useState(false);
+  const [editingClock, setEditingClock] = useState(false);
+  const [clockInput, setClockInput] = useState("00:00");
+  const [savingClock, setSavingClock] = useState(false);
+  // Ignore late full-tournament GETs; prefer match-scoped refresh after load.
+  const fetchGenRef = useRef(0);
+  const deletedEventIdsRef = useRef(new Set());
+  const pendingWritesRef = useRef(0);
 
-  const fetchData = useCallback(
+  /** Initial load only — full tournament for category / round context. */
+  const fetchTournament = useCallback(
     async ({ silent = false } = {}) => {
+      const gen = ++fetchGenRef.current;
       try {
         if (!silent) setLoading(true);
         const res = await fetch(`/api/tournaments/${tournamentId}`, {
           cache: "no-store",
+          credentials: "include",
         });
         if (!res.ok) throw new Error("Tournament not found");
         const data = await res.json();
-        setTournament(data);
+        if (gen !== fetchGenRef.current) return null;
+
+        setTournament((prev) => {
+          if (!prev) {
+            return stripDeletedEvents(data, deletedEventIdsRef.current);
+          }
+          // Versioned merge: never let a stale full GET clobber the active match.
+          const merged = stripDeletedEvents(data, deletedEventIdsRef.current);
+          return patchMatchInTournament(merged, matchId, (incoming) => {
+            const local = findMatchContext(prev, matchId)?.match;
+            if (!local) return incoming;
+            if (pendingWritesRef.current > 0) return local;
+            if (!shouldAcceptServerMatch(local, incoming)) return local;
+            return mergeMatchFromApi(local, incoming, { force: true });
+          });
+        });
 
         const ctx = findMatchContext(data, matchId);
         if (!ctx) throw new Error("Match not found in this tournament");
@@ -108,37 +145,318 @@ export default function MatchScorerPage() {
         setError(null);
         return data;
       } catch (err) {
-        setError(err.message);
+        if (gen === fetchGenRef.current) setError(err.message);
         return null;
       } finally {
-        if (!silent) setLoading(false);
+        if (!silent && gen === fetchGenRef.current) setLoading(false);
       }
     },
     [tournamentId, matchId]
   );
 
+  /**
+   * Match-scoped refresh — used after errors / cricket-set recovery.
+   * Rejects stale payloads via updatedAt + pending write guard.
+   */
+  const refreshMatch = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/matches/${matchId}`, {
+        cache: "no-store",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to refresh match");
+
+      const serverIds = new Set((data.events || []).map((e) => e.id));
+      for (const id of [...deletedEventIdsRef.current]) {
+        if (!serverIds.has(id)) deletedEventIdsRef.current.delete(id);
+      }
+
+      setTournament((prev) =>
+        patchMatchInTournament(prev, matchId, (local) => {
+          if (pendingWritesRef.current > 0) return local;
+          if (!shouldAcceptServerMatch(local, data)) return local;
+          const merged = mergeMatchFromApi(local, data, { force: true });
+          const events = (merged.events || []).filter(
+            (e) => !deletedEventIdsRef.current.has(e.id)
+          );
+          return { ...merged, events };
+        })
+      );
+      return data;
+    } catch (err) {
+      console.error(err);
+      return null;
+    }
+  }, [matchId]);
+
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    fetchTournament();
+  }, [fetchTournament]);
 
   const ctx = tournament ? findMatchContext(tournament, matchId) : null;
   const match = ctx?.match;
 
-  const updateMatchStatus = async (newStatus) => {
+  // Football live clock tick (freeze while paused for injury / interruption)
+  useEffect(() => {
+    if (!match || match.status !== "LIVE" || !match.kickoffAt) return undefined;
+    if (isFootballClockPaused(match)) return undefined;
+    const id = setInterval(() => setClockNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [match?.status, match?.kickoffAt, match?.clockPausedAt]);
+
+  const clockOpts = footballClockOpts(match);
+  const clockPaused = isFootballClockPaused(match);
+  const footballClock =
+    match?.kickoffAt != null
+      ? formatFootballClock(
+          footballElapsedSeconds(match.kickoffAt, clockNow, clockOpts)
+        )
+      : "00:00";
+  const suggestedMinute =
+    match?.kickoffAt != null
+      ? footballMatchMinute(match.kickoffAt, clockNow, clockOpts)
+      : null;
+
+  const applyMatchUpdate = useCallback(
+    (update, { addEvent, removeEventId, force = true } = {}) => {
+      // Invalidate in-flight full tournament GETs.
+      fetchGenRef.current += 1;
+      setTournament((prev) =>
+        patchMatchInTournament(prev, matchId, (m) => {
+          const stamped = {
+            ...update,
+            // Optimistic version so stale GETs lose the race.
+            updatedAt: update?.updatedAt || new Date().toISOString(),
+          };
+          let next = mergeMatchFromApi(m, stamped, { force });
+          if (addEvent) {
+            next = {
+              ...next,
+              events: [
+                addEvent,
+                ...(m.events || []).filter((e) => e.id !== addEvent.id),
+              ],
+            };
+          }
+          if (removeEventId) {
+            next = {
+              ...next,
+              events: (next.events || m.events || []).filter(
+                (e) => e.id !== removeEventId
+              ),
+            };
+          }
+          return next;
+        })
+      );
+    },
+    [matchId]
+  );
+
+  const withWrite = useCallback(async (fn) => {
+    pendingWritesRef.current += 1;
     try {
-      setUpdatingStatus(true);
-      const res = await fetch(`/api/matches/${matchId}/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus }),
-      });
-      if (!res.ok) throw new Error("Failed to update status");
-      await fetchData({ silent: true });
-    } catch (err) {
-      alert(err.message);
+      return await fn();
     } finally {
-      setUpdatingStatus(false);
+      pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
     }
+  }, []);
+
+  const updateMatchStatus = async (newStatus, { resetClock = false } = {}) => {
+    if (updatingStatus) return;
+    if (match?.status === newStatus && !resetClock) return;
+    await withWrite(async () => {
+      try {
+        setUpdatingStatus(true);
+        const nextKickoff =
+          newStatus === "SCHEDULED"
+            ? null
+            : newStatus === "LIVE" && (!match?.kickoffAt || resetClock)
+              ? new Date().toISOString()
+              : undefined;
+        applyMatchUpdate({
+          status: newStatus,
+          ...(nextKickoff !== undefined ? { kickoffAt: nextKickoff } : {}),
+          ...(newStatus === "SCHEDULED"
+            ? {
+                stoppageMinutes: 0,
+                penaltyScoreA: 0,
+                penaltyScoreB: 0,
+                clockPausedAt: null,
+                pausedSeconds: 0,
+              }
+            : {}),
+          ...(resetClock ? { clockPausedAt: null, pausedSeconds: 0 } : {}),
+        });
+        if (nextKickoff) setClockNow(Date.now());
+        const res = await fetch(`/api/matches/${matchId}/status`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: newStatus, resetClock }),
+          credentials: "include",
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(data?.error || "Failed to update status");
+        if (data?.status || data?.id) {
+          const patch = {
+            status: data.status || newStatus,
+            scoreA: data.scoreA,
+            scoreB: data.scoreB,
+            stoppageMinutes: data.stoppageMinutes,
+            penaltyScoreA: data.penaltyScoreA,
+            penaltyScoreB: data.penaltyScoreB,
+            clockPausedAt: data.clockPausedAt,
+            pausedSeconds: data.pausedSeconds,
+            updatedAt: data.updatedAt,
+          };
+          if (data.kickoffAt != null || newStatus === "SCHEDULED") {
+            patch.kickoffAt = data.kickoffAt ?? null;
+          }
+          if (newStatus === "SCHEDULED" || resetClock) {
+            patch.clockPausedAt = data.clockPausedAt ?? null;
+            patch.pausedSeconds = data.pausedSeconds ?? 0;
+          }
+          applyMatchUpdate(patch);
+          if (data.kickoffAt) setClockNow(Date.now());
+        }
+      } catch (err) {
+        alert(err.message);
+        await refreshMatch();
+      } finally {
+        setUpdatingStatus(false);
+      }
+    });
+  };
+
+  const resetFootballClock = async () => {
+    if (!window.confirm("Reset the clock to 00:00?")) return;
+    try {
+      setResettingClock(true);
+      await updateMatchStatus("LIVE", { resetClock: true });
+    } finally {
+      setResettingClock(false);
+    }
+  };
+
+  const openClockEditor = () => {
+    if (match?.status !== "LIVE" || updatingStatus || savingClock) return;
+    setClockInput(footballClock || "00:00");
+    setEditingClock(true);
+  };
+
+  const saveClockTime = async () => {
+    const raw = String(clockInput || "").trim();
+    if (!/^\d{1,3}\s*:\s*\d{1,2}$/.test(raw)) {
+      alert("Enter time like 12:30");
+      return;
+    }
+    await withWrite(async () => {
+      try {
+        setSavingClock(true);
+        const res = await fetch(`/api/matches/${matchId}/status`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ setClock: raw }),
+          credentials: "include",
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Could not set time");
+        applyMatchUpdate({
+          kickoffAt: data.kickoffAt,
+          clockPausedAt: data.clockPausedAt,
+          pausedSeconds: data.pausedSeconds,
+          status: data.status || "LIVE",
+          updatedAt: data.updatedAt,
+        });
+        setClockNow(Date.now());
+        setEditingClock(false);
+      } catch (err) {
+        alert(err.message);
+        await refreshMatch();
+      } finally {
+        setSavingClock(false);
+      }
+    });
+  };
+
+  const setStoppageMinutes = async (value) => {
+    const n = Math.max(0, Math.min(30, parseInt(value, 10) || 0));
+    await withWrite(async () => {
+      applyMatchUpdate({ stoppageMinutes: n });
+      try {
+        const res = await fetch(`/api/matches/${matchId}/status`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ stoppageMinutes: n }),
+          credentials: "include",
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Failed to set stoppage");
+        if (data.stoppageMinutes != null) {
+          applyMatchUpdate({
+            stoppageMinutes: data.stoppageMinutes,
+            clockPausedAt: data.clockPausedAt,
+            pausedSeconds: data.pausedSeconds,
+            updatedAt: data.updatedAt,
+          });
+        }
+      } catch (err) {
+        alert(err.message);
+        await refreshMatch();
+      }
+    });
+  };
+
+  const toggleFootballClockPause = async () => {
+    if (!match?.kickoffAt || updatingStatus) return;
+    const action = clockPaused ? "resume" : "pause";
+    await withWrite(async () => {
+      const optimistic =
+        action === "pause"
+          ? { clockPausedAt: new Date().toISOString() }
+          : {
+              clockPausedAt: null,
+              pausedSeconds:
+                (match.pausedSeconds || 0) +
+                Math.max(
+                  0,
+                  Math.floor(
+                    (Date.now() - new Date(match.clockPausedAt).getTime()) / 1000
+                  )
+                ),
+            };
+      applyMatchUpdate(optimistic);
+      if (action === "resume") setClockNow(Date.now());
+      try {
+        setUpdatingStatus(true);
+        const res = await fetch(`/api/matches/${matchId}/status`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clockAction: action }),
+          credentials: "include",
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Failed to ${action} clock`);
+        applyMatchUpdate({
+          clockPausedAt: data.clockPausedAt ?? null,
+          pausedSeconds: data.pausedSeconds ?? 0,
+          kickoffAt: data.kickoffAt,
+          status: data.status,
+          updatedAt: data.updatedAt,
+        });
+        if (action === "resume") setClockNow(Date.now());
+      } catch (err) {
+        alert(err.message);
+        await refreshMatch();
+      } finally {
+        setUpdatingStatus(false);
+      }
+    });
   };
 
   const handleAddEvent = async (e) => {
@@ -149,54 +467,115 @@ export default function MatchScorerPage() {
       return;
     }
 
-    try {
-      setSubmittingEvent(true);
+    await withWrite(async () => {
+      try {
+        setSubmittingEvent(true);
 
-      let eventTeamId = null;
-      const teamA = match.teamA;
-      const teamB = match.teamB;
+        let eventTeamId = null;
+        const teamA = match.teamA;
+        const teamB = match.teamB;
 
-      if (teamA?.players?.some((p) => p.id === eventPlayerId)) {
-        eventTeamId = teamA.id;
-      } else if (teamB?.players?.some((p) => p.id === eventPlayerId)) {
-        eventTeamId = teamB.id;
-      } else {
-        eventTeamId = selectedEventTeamId || teamA?.id;
+        if (teamA?.players?.some((p) => p.id === eventPlayerId)) {
+          eventTeamId = teamA.id;
+        } else if (teamB?.players?.some((p) => p.id === eventPlayerId)) {
+          eventTeamId = teamB.id;
+        } else {
+          eventTeamId = selectedEventTeamId || teamA?.id;
+        }
+
+        const res = await fetch(`/api/matches/${matchId}/events`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          cache: "no-store",
+          body: JSON.stringify({
+            type: eventType,
+            teamId: eventTeamId,
+            playerId: eventPlayerId,
+            minute: eventMinute
+              ? parseInt(eventMinute, 10)
+              : suggestedMinute,
+          }),
+        });
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Failed to record event");
+
+        if (data.match) {
+          applyMatchUpdate(data.match, { addEvent: data.event });
+        } else {
+          await refreshMatch();
+        }
+        setEventPlayerId("");
+        setEventMinute("");
+      } catch (err) {
+        alert(err.message);
+        await refreshMatch();
+      } finally {
+        setSubmittingEvent(false);
       }
-
-      const res = await fetch(`/api/matches/${matchId}/events`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: eventType,
-          teamId: eventTeamId,
-          playerId: eventPlayerId,
-          minute: eventMinute ? parseInt(eventMinute, 10) : null,
-        }),
-      });
-
-      if (!res.ok) throw new Error("Failed to record event");
-      await fetchData({ silent: true });
-      setEventPlayerId("");
-      setEventMinute("");
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setSubmittingEvent(false);
-    }
+    });
   };
 
   const handleDeleteEvent = async (eventId) => {
-    try {
-      const res = await fetch(
-        `/api/matches/${matchId}/events?eventId=${eventId}`,
-        { method: "DELETE" }
-      );
-      if (!res.ok) throw new Error("Failed to delete event");
-      await fetchData({ silent: true });
-    } catch (err) {
-      alert(err.message);
+    if (!eventId || !match) return;
+    if (!window.confirm("Delete this event? Score will update.")) return;
+
+    const event = (match.events || []).find((e) => e.id === eventId);
+    const t = String(event?.type || "").toUpperCase();
+    let scoreA = match.scoreA;
+    let scoreB = match.scoreB;
+    let penaltyScoreA = match.penaltyScoreA ?? 0;
+    let penaltyScoreB = match.penaltyScoreB ?? 0;
+
+    if (event) {
+      if (t === "GOAL" || t === "PENALTY_GOAL") {
+        if (event.teamId === match.teamAId) scoreA = Math.max(0, scoreA - 1);
+        else if (event.teamId === match.teamBId) scoreB = Math.max(0, scoreB - 1);
+      } else if (t === "OWN_GOAL") {
+        if (event.teamId === match.teamAId) scoreB = Math.max(0, scoreB - 1);
+        else if (event.teamId === match.teamBId) scoreA = Math.max(0, scoreA - 1);
+      } else if (t === "SHOOTOUT_SCORED") {
+        if (event.teamId === match.teamAId) penaltyScoreA = Math.max(0, penaltyScoreA - 1);
+        else if (event.teamId === match.teamBId) penaltyScoreB = Math.max(0, penaltyScoreB - 1);
+      }
     }
+
+    await withWrite(async () => {
+      deletedEventIdsRef.current.add(eventId);
+      applyMatchUpdate(
+        { scoreA, scoreB, penaltyScoreA, penaltyScoreB },
+        { removeEventId: eventId }
+      );
+
+      try {
+        const res = await fetch(`/api/matches/${matchId}/events`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          cache: "no-store",
+          body: JSON.stringify({ action: "delete", eventId }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Failed to delete event");
+        if (data.match) {
+          applyMatchUpdate(
+            {
+              scoreA: data.match.scoreA,
+              scoreB: data.match.scoreB,
+              penaltyScoreA: data.match.penaltyScoreA,
+              penaltyScoreB: data.match.penaltyScoreB,
+              updatedAt: data.match.updatedAt,
+            },
+            { removeEventId: eventId }
+          );
+        }
+      } catch (err) {
+        deletedEventIdsRef.current.delete(eventId);
+        alert(err.message);
+        await refreshMatch();
+      }
+    });
   };
 
   const goBack = () => {
@@ -234,7 +613,12 @@ export default function MatchScorerPage() {
     );
   }
 
-  const isCricket = tournament.sport === "CRICKET";
+  const category = ctx?.category;
+  const isCricket = category?.sport === "CRICKET";
+  const isSetBased = isSetBasedSport(category?.sport);
+  const sportName = category?.sport
+    ? category.sport.charAt(0) + category.sport.slice(1).toLowerCase()
+    : "Match";
 
   const playersForTeam =
     selectedEventTeamId === match.teamAId
@@ -261,23 +645,29 @@ export default function MatchScorerPage() {
                 <Activity className="w-4 h-4 text-mustard-gold animate-pulse shrink-0" />
                 <h1 className="text-[11px] sm:text-sm font-mono font-bold uppercase tracking-wider truncate">
                   <span className="sm:hidden">
-                    {isCricket ? "Cricket Scorer" : "Scorer Console"}
+                    {isCricket ? "Cricket Scorer" : isSetBased ? `${sportName} Scorer` : "Scorer Console"}
                   </span>
                   <span className="hidden sm:inline">
                     {isCricket
                       ? "Cricket Ball-by-Ball Scorer"
-                      : "Live Match Scorer Console"}
+                      : isSetBased
+                        ? `${sportName} Live Scorer`
+                        : "Live Match Scorer Console"}
                   </span>
                 </h1>
               </div>
               <p className="text-[9px] sm:text-[10px] font-mono text-white/55 mt-0.5 truncate">
                 {tournament.name}
-                {isCricket && tournament.oversPerInnings
-                  ? ` · ${tournament.oversPerInnings} overs`
+                {isCricket && category?.oversPerInnings
+                  ? ` · ${category.oversPerInnings} overs`
                   : ""}
-                {ctx.category ? ` · ${ctx.category.name}` : ""}
+                {category ? ` · ${category.name}` : ""}
                 {ctx.round
-                  ? ` · ${getRoundName(ctx.round.number, ctx.totalRounds)}`
+                  ? ` · ${getRoundName(
+                      ctx.round.number,
+                      ctx.totalRounds,
+                      category?.scheduleFormat
+                    )}`
                   : ""}
               </p>
             </div>
@@ -296,44 +686,206 @@ export default function MatchScorerPage() {
         {isCricket ? (
           <CricketScorer
             tournament={tournament}
+            category={category}
             match={match}
             matchId={matchId}
-            onRefresh={() => fetchData({ silent: true })}
+            onMatchUpdate={applyMatchUpdate}
+            onRefresh={refreshMatch}
           />
         ) : null}
 
-        {!isCricket && (
+        {isSetBased ? (
+          <SetBasedScorer
+            tournament={tournament}
+            category={category}
+            match={match}
+            matchId={matchId}
+            onMatchUpdate={applyMatchUpdate}
+            onRefresh={refreshMatch}
+          />
+        ) : null}
+
+        {!isCricket && !isSetBased && (
         <>
         {/* Scoreboard */}
-        <section className="bg-[#0d472c] border-2 border-mustard-gold rounded-2xl p-4 sm:p-8 shadow-lg text-white">
-          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-5 sm:mb-6 border-b border-[#093c24] pb-4">
+        <section className="bg-[#0d472c] border-2 border-mustard-gold rounded-2xl p-4 sm:p-6 shadow-lg text-white">
+          <div className="flex flex-col gap-4 mb-5 border-b border-[#093c24] pb-4">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[10px] font-mono text-mustard-gold uppercase font-bold">
-                Match State:
+                Match status
               </span>
-              <select
-                value={match.status}
-                disabled={updatingStatus}
-                onChange={(e) => updateMatchStatus(e.target.value)}
-                className="bg-[#093c24] border border-white/25 text-[10px] font-mono text-white rounded-lg px-2.5 py-2 focus:ring-1 focus:ring-mustard-gold outline-none cursor-pointer disabled:opacity-60 min-h-[40px]"
-              >
-                <option value="SCHEDULED">SCHEDULED</option>
-                <option value="LIVE">LIVE</option>
-                <option value="COMPLETED">COMPLETED</option>
-              </select>
+              {[
+                { id: "SCHEDULED", label: "Scheduled" },
+                { id: "LIVE", label: "Live" },
+                { id: "COMPLETED", label: "Completed" },
+              ].map(({ id, label }) => {
+                const active = match.status === id;
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    disabled={updatingStatus || active}
+                    onClick={() => updateMatchStatus(id)}
+                    className={`text-xs font-bold rounded-lg px-3 py-2 min-h-[40px] border cursor-pointer disabled:cursor-default transition-colors ${
+                      active
+                        ? id === "LIVE"
+                          ? "bg-red-600 border-red-400 text-white"
+                          : id === "COMPLETED"
+                            ? "bg-mustard-gold border-mustard-gold text-[#0d472c]"
+                            : "bg-white/20 border-white/40 text-white"
+                        : "bg-[#093c24] border-white/25 text-white/70 hover:border-mustard-gold/50 hover:text-white"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
               {updatingStatus && (
                 <Loader2 className="w-3.5 h-3.5 animate-spin text-mustard-gold" />
               )}
             </div>
+
             {match.status === "LIVE" && (
-              <span className="text-[10px] text-red-400 font-mono font-bold animate-pulse flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-red-500" />
-                RECORDING EVENT LIVE
-              </span>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-wrap">
+                {editingClock ? (
+                  <div className="flex items-center gap-2 bg-[#093c24] border border-mustard-gold rounded-xl px-3 py-2">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      autoFocus
+                      value={clockInput}
+                      onChange={(e) => setClockInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveClockTime();
+                        if (e.key === "Escape") setEditingClock(false);
+                      }}
+                      placeholder="MM:SS"
+                      className="w-[5.5rem] bg-transparent text-2xl font-mono font-bold text-mustard-gold tabular-nums outline-none text-center"
+                    />
+                    <button
+                      type="button"
+                      disabled={savingClock}
+                      onClick={saveClockTime}
+                      className="text-xs font-bold bg-mustard-gold text-[#0d472c] rounded-lg px-3 py-2 cursor-pointer disabled:opacity-50"
+                    >
+                      {savingClock ? "…" : "Set"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={savingClock}
+                      onClick={() => setEditingClock(false)}
+                      className="text-xs font-bold text-white/70 border border-white/20 rounded-lg px-3 py-2 cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={openClockEditor}
+                    title="Tap to set time"
+                    className={`flex items-center justify-center gap-2 bg-[#093c24] border rounded-xl px-4 py-2 cursor-pointer hover:bg-[#0a331f] transition-colors ${
+                      clockPaused
+                        ? "border-amber-400/70"
+                        : "border-mustard-gold/40"
+                    }`}
+                  >
+                    <span className="text-[8px] font-mono uppercase tracking-widest text-white/45">
+                      {clockPaused ? "Paused" : "Time"}
+                    </span>
+                    <span
+                      className={`text-2xl font-mono font-bold tabular-nums tracking-wider ${
+                        clockPaused ? "text-amber-300" : "text-mustard-gold"
+                      }`}
+                    >
+                      {footballClock}
+                    </span>
+                    <span className="text-[9px] font-mono text-white/40 hidden sm:inline">
+                      tap to set
+                    </span>
+                  </button>
+                )}
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={toggleFootballClockPause}
+                    disabled={updatingStatus || !match.kickoffAt || editingClock}
+                    className={`text-xs font-bold rounded-lg px-3 py-2 border cursor-pointer disabled:opacity-50 min-h-[40px] ${
+                      clockPaused
+                        ? "text-emerald-300 border-emerald-400/50 hover:bg-emerald-400/10"
+                        : "text-amber-300 border-amber-400/50 hover:bg-amber-400/10"
+                    }`}
+                  >
+                    {clockPaused ? "Resume" : "Pause"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={resetFootballClock}
+                    disabled={resettingClock || updatingStatus || editingClock}
+                    className="text-xs font-bold text-mustard-gold border border-mustard-gold/40 rounded-lg px-3 py-2 hover:bg-mustard-gold/10 cursor-pointer disabled:opacity-50 min-h-[40px]"
+                  >
+                    {resettingClock ? "…" : "Reset"}
+                  </button>
+                  <div className="flex items-center gap-1.5 bg-[#093c24] border border-white/15 rounded-xl px-2 py-1.5">
+                    <span className="text-[8px] font-mono uppercase text-white/45 tracking-wider px-1">
+                      Extra
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setStoppageMinutes((match.stoppageMinutes || 0) - 1)
+                      }
+                      className="w-8 h-8 rounded-lg bg-white/10 text-white font-bold cursor-pointer hover:bg-white/20"
+                    >
+                      −
+                    </button>
+                    <span className="text-sm font-mono font-bold text-mustard-gold tabular-nums min-w-[2.5rem] text-center">
+                      +{match.stoppageMinutes || 0}&apos;
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setStoppageMinutes((match.stoppageMinutes || 0) + 1)
+                      }
+                      className="w-8 h-8 rounded-lg bg-white/10 text-white font-bold cursor-pointer hover:bg-white/20"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+
+                {clockPaused ? (
+                  <span className="text-xs text-amber-300 font-bold flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-amber-400" />
+                    Paused
+                  </span>
+                ) : match.kickoffAt ? (
+                  <span className="text-xs text-red-400 font-bold animate-pulse flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-red-500" />
+                    Live
+                  </span>
+                ) : (
+                  <span className="text-xs text-red-400 font-bold animate-pulse flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-red-500" />
+                    Starting…
+                  </span>
+                )}
+              </div>
             )}
+
             {match.status === "COMPLETED" && (
-              <span className="text-[10px] text-mustard-gold/90 font-mono font-bold uppercase tracking-wider">
-                Match completed · points locked
+              <span className="text-xs text-mustard-gold/90 font-bold">
+                Match finished
+                {match.kickoffAt
+                  ? ` · ${formatFootballClock(
+                      footballElapsedSeconds(
+                        match.kickoffAt,
+                        clockNow,
+                        footballClockOpts(match)
+                      )
+                    )}`
+                  : ""}
               </span>
             )}
           </div>
@@ -371,20 +923,20 @@ export default function MatchScorerPage() {
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white border-2 border-dashed border-mustard-gold p-5 sm:p-6 rounded-2xl space-y-4 shadow-sm">
             <h3 className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#0a331f]/70 border-b border-slate-100 pb-2">
-              Record Match Event
+              Add event
             </h3>
 
             <form onSubmit={handleAddEvent} className="space-y-4">
               <div>
                 <label className="block text-[9px] font-mono text-[#0a331f]/60 uppercase tracking-wider mb-2">
-                  Event Action Type
+                  What happened
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   {[
                     { id: "GOAL", label: "⚽ Goal" },
-                    { id: "OWN_GOAL", label: "❌ Own Goal" },
-                    { id: "YELLOW_CARD", label: "🟨 Yellow Card" },
-                    { id: "RED_CARD", label: "🟥 Red Card" },
+                    { id: "OWN_GOAL", label: "❌ Own goal" },
+                    { id: "YELLOW_CARD", label: "🟨 Yellow" },
+                    { id: "RED_CARD", label: "🟥 Red" },
                   ].map((evt) => (
                     <button
                       key={evt.id}
@@ -404,7 +956,7 @@ export default function MatchScorerPage() {
 
               <div>
                 <label className="block text-[9px] font-mono text-[#0a331f]/60 uppercase tracking-wider mb-2 font-bold">
-                  Select Team
+                  Team
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   <button
@@ -442,7 +994,7 @@ export default function MatchScorerPage() {
 
               <div>
                 <label className="block text-[9px] font-mono text-[#0a331f]/60 uppercase tracking-wider mb-2 font-bold">
-                  Assign Roster Player
+                  Player
                 </label>
                 <select
                   required
@@ -450,7 +1002,7 @@ export default function MatchScorerPage() {
                   onChange={(e) => setEventPlayerId(e.target.value)}
                   className="w-full bg-white border border-slate-200 focus:border-mustard-gold rounded-xl px-3 py-3 text-xs text-deep-forest outline-none transition-all cursor-pointer shadow-sm"
                 >
-                  <option value="">-- Choose Roster Player --</option>
+                  <option value="">-- Pick player --</option>
                   {playersForTeam.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name} (#{p.shirtNumber})
@@ -461,20 +1013,29 @@ export default function MatchScorerPage() {
 
               <div>
                 <label className="block text-[9px] font-mono text-[#0a331f]/60 uppercase tracking-wider mb-2">
-                  Occurrence Minute (Optional)
+                  Minute (optional)
                 </label>
                 <div className="flex gap-2 items-center">
                   <input
                     type="number"
                     min="1"
                     max="120"
-                    placeholder="e.g. 78"
+                    placeholder={
+                      suggestedMinute != null
+                        ? `Auto ${suggestedMinute}'`
+                        : "e.g. 78"
+                    }
                     value={eventMinute}
                     onChange={(e) => setEventMinute(e.target.value)}
                     className="flex-1 bg-white border border-slate-200 focus:border-mustard-gold rounded-xl px-3 py-3 text-xs text-deep-forest outline-none transition-all shadow-sm"
                   />
-                  <span className="text-xs font-mono text-slate-400">MINS</span>
+                  <span className="text-xs font-mono text-slate-400">min</span>
                 </div>
+                {match.status === "LIVE" && suggestedMinute != null && !eventMinute && (
+                  <p className="text-[9px] font-mono text-deep-forest/45 mt-1.5">
+                    Leave empty to use clock ({suggestedMinute}&apos;)
+                  </p>
+                )}
               </div>
 
               <button
@@ -485,10 +1046,10 @@ export default function MatchScorerPage() {
                 {submittingEvent ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    Logging Event...
+                    Saving…
                   </>
                 ) : (
-                  "Log Match Event"
+                  "Save"
                 )}
               </button>
             </form>
@@ -496,7 +1057,7 @@ export default function MatchScorerPage() {
 
           <div className="bg-white border-2 border-dashed border-mustard-gold p-5 sm:p-6 rounded-2xl flex flex-col shadow-sm min-h-[360px]">
             <h3 className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#0a331f]/60 border-b border-slate-100 pb-2 mb-3">
-              Live Feed Log
+              Events
             </h3>
 
             <div className="flex-1 space-y-2 overflow-y-auto max-h-[420px] pr-1">
@@ -510,16 +1071,29 @@ export default function MatchScorerPage() {
                     >
                       <div className="flex items-center gap-2 truncate min-w-0">
                         <span className="text-mustard-gold font-bold shrink-0">
-                          {event.minute ? `${event.minute}'` : "--'"}
+                          {formatEventMinute(
+                            event.minute,
+                            match.stoppageMinutes
+                          )}
                         </span>
                         <span className="text-deep-forest shrink-0">
                           {event.type === "GOAL"
                             ? "⚽ Goal"
                             : event.type === "OWN_GOAL"
-                              ? "❌ Own Goal"
-                              : event.type === "YELLOW_CARD"
-                                ? "🟨 Yel"
-                                : "🟥 Red"}
+                              ? "❌ OG"
+                              : event.type === "PENALTY_GOAL"
+                                ? "🎯 Pen"
+                                : event.type === "PENALTY_MISS"
+                                  ? "🚫 Pen miss"
+                                  : event.type === "SHOOTOUT_SCORED"
+                                    ? "✓ SO"
+                                    : event.type === "SHOOTOUT_MISSED"
+                                      ? "✗ SO"
+                                      : event.type === "YELLOW_CARD"
+                                        ? "🟨 Yel"
+                                        : event.type === "RED_CARD"
+                                          ? "🟥 Red"
+                                          : event.type}
                         </span>
                         <span className="text-[#3f6b55] truncate">
                           - {event.player ? event.player.name : "Roster Player"}
@@ -556,17 +1130,6 @@ export default function MatchScorerPage() {
         </section>
         </>
         )}
-
-        <div className="flex justify-center pb-4">
-          <button
-            type="button"
-            onClick={goBack}
-            disabled={isPending}
-            className="text-[10px] font-mono font-bold uppercase tracking-wider text-deep-forest/50 hover:text-deep-forest transition-colors cursor-pointer"
-          >
-            ← Return to tournament dashboard
-          </button>
-        </div>
       </main>
     </div>
   );

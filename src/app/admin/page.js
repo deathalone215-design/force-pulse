@@ -22,8 +22,16 @@ import {
   Trash2,
 } from "lucide-react";
 import { uploadImageToSupabase } from "@/lib/imageUpload";
+import { categoryDisplayName, sportLabel } from "@/lib/sports";
 
 const SUGGESTED_CATEGORIES = ["U12", "U13", "U14", "U15", "U16", "U18", "OPEN"];
+const SPORT_OPTIONS = [
+  { id: "FOOTBALL", label: "Football" },
+  { id: "CRICKET", label: "Cricket" },
+  { id: "VOLLEYBALL", label: "Volleyball" },
+  { id: "BADMINTON", label: "Badminton" },
+  { id: "PICKLEBALL", label: "Pickleball" },
+];
 
 function toDateInputValue(date) {
   if (!date) return "";
@@ -43,93 +51,187 @@ function teamCount(tournament) {
   );
 }
 
-function DynamicCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
-  const [draft, setDraft] = useState("");
+function categoryKey(c) {
+  return `${(c.sport || "FOOTBALL").toUpperCase()}::${(c.name || "").toLowerCase()}`;
+}
+
+/** Rows: { name, sport, oversPerInnings } — one tournament can mix sports. */
+function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
+  const [draftName, setDraftName] = useState("");
+  const [draftSport, setDraftSport] = useState("FOOTBALL");
+  const [draftOvers, setDraftOvers] = useState("20");
 
   const normalize = (name) => name.trim().replace(/\s+/g, " ");
 
-  const addCategory = (raw) => {
-    const name = normalize(raw);
+  const addCategory = (rawName, sport = draftSport, overs = draftOvers) => {
+    const name = normalize(rawName);
     if (!name) return;
-    const exists = selected.some((c) => c.toLowerCase() === name.toLowerCase());
-    if (exists) {
-      setDraft("");
+    const sportId = String(sport || "FOOTBALL").toUpperCase();
+    const row = {
+      name,
+      sport: sportId,
+      oversPerInnings:
+        sportId === "CRICKET" ? parseInt(overs, 10) || 20 : null,
+    };
+    if (selected.some((c) => categoryKey(c) === categoryKey(row))) {
+      setDraftName("");
       return;
     }
-    onChange([...selected, name]);
-    setDraft("");
+    if (sportId === "CRICKET") {
+      const ov = parseInt(overs, 10);
+      if (!ov || ov < 1 || ov > 50) {
+        alert("Cricket categories need overs between 1 and 50");
+        return;
+      }
+      row.oversPerInnings = ov;
+    }
+    onChange([...selected, row]);
+    setDraftName("");
   };
 
-  const removeCategory = (name) => {
-    onChange(selected.filter((c) => c !== name));
+  const removeCategory = (row) => {
+    onChange(selected.filter((c) => categoryKey(c) !== categoryKey(row)));
+  };
+
+  const updateRow = (row, patch) => {
+    onChange(
+      selected.map((c) =>
+        categoryKey(c) === categoryKey(row) ? { ...c, ...patch } : c
+      )
+    );
   };
 
   return (
     <div className="space-y-3">
       {selected.length > 0 && (
-        <div className="flex flex-wrap gap-2">
+        <div className="space-y-2">
           {selected.map((cat) => (
-            <span
-              key={cat}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider bg-mustard-gold text-deep-forest border border-mustard-gold shadow-sm"
+            <div
+              key={categoryKey(cat)}
+              className="flex flex-wrap items-center gap-2 p-2.5 rounded-xl bg-cream-bg/60 border border-slate-200"
             >
-              <Tags className="w-2.5 h-2.5" />
-              {cat}
+              <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px] font-mono font-bold uppercase tracking-wider bg-mustard-gold text-deep-forest">
+                <Tags className="w-2.5 h-2.5" />
+                {cat.name}
+              </span>
+              <select
+                value={cat.sport || "FOOTBALL"}
+                onChange={(e) => {
+                  const sport = e.target.value;
+                  updateRow(cat, {
+                    sport,
+                    oversPerInnings:
+                      sport === "CRICKET" ? cat.oversPerInnings || 20 : null,
+                  });
+                }}
+                className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-[10px] font-mono font-bold uppercase outline-none"
+              >
+                {SPORT_OPTIONS.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              {cat.sport === "CRICKET" && (
+                <label className="inline-flex items-center gap-1 text-[9px] font-mono text-deep-forest/60">
+                  Overs
+                  <input
+                    type="number"
+                    min={1}
+                    max={50}
+                    value={cat.oversPerInnings || 20}
+                    onChange={(e) =>
+                      updateRow(cat, {
+                        oversPerInnings: parseInt(e.target.value, 10) || 20,
+                      })
+                    }
+                    className="w-14 bg-white border border-slate-200 rounded-lg px-1.5 py-1 text-[10px] font-mono outline-none"
+                  />
+                </label>
+              )}
               <button
                 type="button"
                 onClick={() => removeCategory(cat)}
-                className="p-1.5 -mr-1 rounded hover:bg-deep-forest/10 cursor-pointer min-h-[28px] min-w-[28px] flex items-center justify-center"
-                aria-label={`Remove ${cat}`}
+                className="ml-auto p-1.5 rounded hover:bg-red-50 text-red-600 cursor-pointer"
+                aria-label={`Remove ${cat.name}`}
               >
                 <X className="w-3.5 h-3.5" />
               </button>
-            </span>
+            </div>
           ))}
         </div>
       )}
 
-      <div className="flex gap-2">
-        <input
-          id={`${idPrefix}-input`}
-          type="text"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              addCategory(draft);
-            }
-          }}
-          placeholder="e.g. U15, OPEN, Girls U13..."
-          className="flex-1 bg-cream-bg/40 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-3 py-2 text-sm text-deep-forest outline-none"
-        />
-        <button
-          type="button"
-          onClick={() => addCategory(draft)}
-          disabled={!draft.trim()}
-          className="px-3 py-2 bg-mustard-gold hover:bg-mustard-gold-hover text-deep-forest rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider cursor-pointer disabled:opacity-40 flex items-center gap-1"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          Add
-        </button>
-      </div>
-
-      <div className="flex flex-wrap gap-1.5">
-        <span className="text-[9px] font-mono text-deep-forest/40 uppercase tracking-wider self-center mr-1">
-          Quick:
-        </span>
-        {SUGGESTED_CATEGORIES.filter(
-          (s) => !selected.some((c) => c.toLowerCase() === s.toLowerCase())
-        ).map((cat) => (
-          <button
-            key={cat}
-            type="button"
-            onClick={() => addCategory(cat)}
-            className="px-2 py-1 rounded-md text-[9px] font-mono font-bold uppercase tracking-wider border border-dashed border-slate-300 text-deep-forest/60 hover:border-mustard-gold hover:text-deep-forest cursor-pointer"
+      <div className="space-y-2 p-3 rounded-xl border border-dashed border-slate-300 bg-white/50">
+        <div className="flex flex-wrap gap-2">
+          <input
+            id={`${idPrefix}-input`}
+            type="text"
+            value={draftName}
+            onChange={(e) => setDraftName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addCategory(draftName);
+              }
+            }}
+            placeholder="Category e.g. OPEN, U15"
+            className="flex-1 min-w-[120px] bg-cream-bg/40 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-3 py-2 text-sm text-deep-forest outline-none"
+          />
+          <select
+            value={draftSport}
+            onChange={(e) => setDraftSport(e.target.value)}
+            className="bg-cream-bg/40 border border-slate-200 rounded-xl px-2 py-2 text-[10px] font-mono font-bold uppercase outline-none"
           >
-            + {cat}
+            {SPORT_OPTIONS.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          {draftSport === "CRICKET" && (
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={draftOvers}
+              onChange={(e) => setDraftOvers(e.target.value)}
+              title="Overs per innings"
+              className="w-16 bg-cream-bg/40 border border-slate-200 rounded-xl px-2 py-2 text-sm outline-none"
+            />
+          )}
+          <button
+            type="button"
+            onClick={() => addCategory(draftName)}
+            disabled={!draftName.trim()}
+            className="px-3 py-2 bg-mustard-gold hover:bg-mustard-gold-hover text-deep-forest rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider cursor-pointer disabled:opacity-40 flex items-center gap-1"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Add
           </button>
-        ))}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          <span className="text-[9px] font-mono text-deep-forest/40 uppercase tracking-wider self-center mr-1">
+            Quick ({sportLabel(draftSport)}):
+          </span>
+          {SUGGESTED_CATEGORIES.filter(
+            (s) =>
+              !selected.some(
+                (c) =>
+                  categoryKey(c) ===
+                  categoryKey({ name: s, sport: draftSport })
+              )
+          ).map((cat) => (
+            <button
+              key={cat}
+              type="button"
+              onClick={() => addCategory(cat)}
+              className="px-2 py-1 rounded-md text-[9px] font-mono font-bold uppercase tracking-wider border border-dashed border-slate-300 text-deep-forest/60 hover:border-mustard-gold hover:text-deep-forest cursor-pointer"
+            >
+              + {cat}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -148,8 +250,6 @@ export default function AdminHome() {
   const [categories, setCategories] = useState([]);
   const [startDate, setStartDate] = useState("");
   const [logoUrl, setLogoUrl] = useState(null);
-  const [sport, setSport] = useState("FOOTBALL");
-  const [oversPerInnings, setOversPerInnings] = useState(20);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState(null);
   const logoInputRef = useRef(null);
@@ -273,14 +373,16 @@ export default function AdminHome() {
     e.preventDefault();
     if (!name.trim()) return;
     if (categories.length === 0) {
-      alert("Select at least one category");
+      alert("Add at least one category (with a sport)");
       return;
     }
-    if (sport === "CRICKET") {
-      const overs = parseInt(oversPerInnings, 10);
-      if (!overs || overs < 1 || overs > 50) {
-        alert("Enter overs per innings between 1 and 50");
-        return;
+    for (const c of categories) {
+      if (c.sport === "CRICKET") {
+        const overs = parseInt(c.oversPerInnings, 10);
+        if (!overs || overs < 1 || overs > 50) {
+          alert(`Cricket category "${c.name}" needs overs between 1 and 50`);
+          return;
+        }
       }
     }
 
@@ -294,8 +396,6 @@ export default function AdminHome() {
           startDate,
           logoUrl,
           categories,
-          sport,
-          oversPerInnings: sport === "CRICKET" ? oversPerInnings : null,
         }),
       });
 
@@ -308,8 +408,6 @@ export default function AdminHome() {
       setName("");
       setCategories([]);
       setStartDate("");
-      setSport("FOOTBALL");
-      setOversPerInnings(20);
       clearLogo();
       setTournaments([newTournament, ...tournaments]);
     } catch (err) {
@@ -322,7 +420,13 @@ export default function AdminHome() {
   const startEditing = (tournament) => {
     setEditingId(tournament.id);
     setEditName(tournament.name || "");
-    setEditCategories((tournament.categories || []).map((c) => c.name));
+    setEditCategories(
+      (tournament.categories || []).map((c) => ({
+        name: c.name,
+        sport: c.sport || "FOOTBALL",
+        oversPerInnings: c.oversPerInnings ?? null,
+      }))
+    );
     setEditStartDate(toDateInputValue(tournament.startDate));
     setEditLogoUrl(tournament.logoUrl || null);
     if (editLogoInputRef.current) editLogoInputRef.current.value = "";
@@ -518,7 +622,7 @@ export default function AdminHome() {
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-8 sm:py-12 relative z-10">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
           <div className="lg:col-span-1">
-            <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl p-6 shadow-sm relative overflow-hidden">
+            <div className="bg-white border border-slate-200 border-t-4 border-t-mustard-gold rounded-2xl p-6 shadow-sm relative overflow-hidden">
               <div className="flex items-center gap-2 mb-6 border-b border-cream-bg pb-3">
                 <Award className="w-5 h-5 text-mustard-gold" />
                 <h2 className="text-sm font-bold text-deep-forest tracking-wider uppercase font-mono">
@@ -543,56 +647,11 @@ export default function AdminHome() {
 
                 <div>
                   <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold">
-                    Sport
+                    Categories + sports
                   </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { id: "FOOTBALL", label: "Football" },
-                      { id: "CRICKET", label: "Cricket" },
-                    ].map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => setSport(opt.id)}
-                        className={`py-2.5 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider border cursor-pointer transition-all ${
-                          sport === opt.id
-                            ? "bg-mustard-gold border-mustard-gold text-deep-forest"
-                            : "bg-cream-bg/40 border-slate-200 text-deep-forest/60 hover:border-mustard-gold/50"
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {sport === "CRICKET" && (
-                  <div>
-                    <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold">
-                      Overs per innings
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={50}
-                      required
-                      value={oversPerInnings}
-                      onChange={(e) => setOversPerInnings(e.target.value)}
-                      className="w-full bg-cream-bg/40 border border-slate-200 focus:bg-white focus:border-mustard-gold focus:ring-1 focus:ring-mustard-gold rounded-xl px-4 py-2.5 text-sm text-deep-forest outline-none transition-all"
-                    />
-                    <p className="mt-2 text-[9px] font-mono text-deep-forest/45">
-                      Each side bats for this many overs (e.g. 6, 10, or 20).
-                    </p>
-                  </div>
-                )}
-
-                <div>
-                  <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold">
-                    Categories
-                  </label>
-                  <DynamicCategoryEditor selected={categories} onChange={setCategories} />
+                  <SportCategoryEditor selected={categories} onChange={setCategories} />
                   <p className="mt-2 text-[9px] font-mono text-deep-forest/45">
-                    Type any category name and click Add — each gets its own clubs and schedule.
+                    Add multiple rows — e.g. OPEN Football, U15 Football, OPEN Cricket — each gets its own clubs and schedule.
                   </p>
                 </div>
 
@@ -682,13 +741,13 @@ export default function AdminHome() {
               <h2 className="text-xs font-bold tracking-widest uppercase font-mono text-deep-forest/60">
                 ACTIVE TOURNAMENTS
               </h2>
-              <span className="text-[10px] font-mono text-deep-forest bg-white border border-dashed border-mustard-gold rounded-full px-3.5 py-1 font-bold shadow-sm">
+              <span className="text-[10px] font-mono text-deep-forest bg-white border border-mustard-gold/30 rounded-full px-3.5 py-1 font-bold shadow-sm">
                 Count: {tournaments.length}
               </span>
             </div>
 
             {loading ? (
-              <div className="flex flex-col items-center justify-center py-24 bg-white border-2 border-dashed border-mustard-gold rounded-2xl gap-4 shadow-sm">
+              <div className="flex flex-col items-center justify-center py-24 bg-white border border-slate-200 rounded-2xl gap-4 shadow-sm">
                 <Loader2 className="w-8 h-8 animate-spin text-mustard-gold" />
                 <p className="text-xs font-mono text-deep-forest/50">Querying database...</p>
               </div>
@@ -697,7 +756,7 @@ export default function AdminHome() {
                 <ShieldAlert className="w-4 h-4" /> Error: {error}
               </div>
             ) : tournaments.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-28 bg-white border-2 border-dashed border-mustard-gold rounded-2xl gap-4 text-center px-6 relative overflow-hidden shadow-sm animate-fadeIn">
+              <div className="flex flex-col items-center justify-center py-28 bg-white border border-slate-200 rounded-2xl gap-4 text-center px-6 relative overflow-hidden shadow-sm animate-fadeIn">
                 <Trophy className="w-12 h-12 text-slate-300" />
                 <h3 className="text-sm font-bold text-deep-forest uppercase tracking-wider font-mono">
                   No Tournaments Registered
@@ -716,7 +775,7 @@ export default function AdminHome() {
                       <form
                         key={t.id}
                         onSubmit={handleSaveEdit}
-                        className="flex flex-col bg-white border-2 border-solid border-mustard-gold rounded-2xl p-6 shadow-md relative overflow-hidden"
+                        className="flex flex-col bg-white border border-slate-200 border-t-4 border-t-mustard-gold rounded-2xl p-6 shadow-md relative overflow-hidden"
                       >
                         <div className="flex items-center gap-2 mb-4 border-b border-cream-bg pb-3">
                           <Pencil className="w-4 h-4 text-mustard-gold" />
@@ -743,7 +802,7 @@ export default function AdminHome() {
                             <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-1.5 font-bold">
                               Categories
                             </label>
-                            <DynamicCategoryEditor
+                            <SportCategoryEditor
                               selected={editCategories}
                               onChange={setEditCategories}
                               idPrefix={`edit-${t.id}`}
@@ -847,11 +906,11 @@ export default function AdminHome() {
                   return (
                     <div
                       key={t.id}
-                      className="group flex flex-col bg-white border-2 border-dashed border-mustard-gold hover:border-solid hover:border-mustard-gold hover:shadow-md rounded-2xl p-6 transition-all duration-350 shadow-sm relative overflow-hidden"
+                      className="group flex flex-col bg-white border border-slate-200/80 hover:border-mustard-gold hover:shadow-md rounded-2xl p-6 transition-all duration-300 shadow-sm relative overflow-hidden"
                     >
-                      <div className="absolute top-0 left-0 w-1.5 h-full bg-mustard-gold transform -translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
+                      <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-mustard-gold rounded-l-[14px]" />
 
-                      <div className="flex justify-between items-start gap-3 mb-6">
+                      <div className="flex justify-between items-start gap-3 mb-4 pl-2">
                         <Link
                           href={`/tournaments/${t.id}`}
                           className="flex items-center gap-3 min-w-0 flex-1"
@@ -860,7 +919,7 @@ export default function AdminHome() {
                             <img
                               src={t.logoUrl}
                               alt={`${t.name} logo`}
-                              className="w-12 h-12 rounded-xl object-cover border-2 border-mustard-gold/60 shadow-sm shrink-0"
+                              className="w-12 h-12 rounded-xl object-cover border border-mustard-gold/40 shadow-sm shrink-0"
                             />
                           ) : (
                             <div className="w-12 h-12 rounded-xl bg-cream-bg border border-slate-200 flex items-center justify-center shrink-0">
@@ -872,59 +931,67 @@ export default function AdminHome() {
                               {t.name}
                             </h3>
                             <div className="flex flex-wrap gap-1 mt-1.5">
-                              <span className="inline-flex items-center text-[9px] font-mono font-bold uppercase tracking-wider text-deep-forest bg-[#0d472c]/10 border border-[#0d472c]/20 rounded-md px-1.5 py-0.5">
-                                {t.sport === "CRICKET"
-                                  ? `Cricket · ${t.oversPerInnings || "?"} ov`
-                                  : "Football"}
-                              </span>
+                              {(t.sportLabels || t.sports || []).map((label) => (
+                                <span
+                                  key={label}
+                                  className="inline-flex items-center text-[9px] font-mono font-bold uppercase tracking-wider text-deep-forest bg-[#0d472c]/10 border border-[#0d472c]/20 rounded-md px-1.5 py-0.5"
+                                >
+                                  {label}
+                                </span>
+                              ))}
                               {(t.categories || []).map((c) => (
                                 <span
                                   key={c.id}
                                   className="inline-flex items-center gap-1 text-[9px] font-mono font-bold uppercase tracking-wider text-mustard-gold-hover bg-mustard-gold/15 border border-mustard-gold/40 rounded-md px-1.5 py-0.5"
                                 >
                                   <Tags className="w-2.5 h-2.5" />
-                                  {c.name}
+                                  {categoryDisplayName(c)}
                                 </span>
                               ))}
                             </div>
                           </div>
                         </Link>
+                      </div>
 
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <Link
-                            href={`/live/${t.id}`}
-                            className="p-2.5 bg-cream-bg rounded-lg border border-slate-200 text-deep-forest hover:bg-mustard-gold hover:border-mustard-gold transition-all min-h-[44px] min-w-[44px] flex items-center justify-center"
-                            aria-label={`Live board for ${t.name}`}
-                            title="Public live board"
-                          >
-                            <Radio className="w-4 h-4" />
-                          </Link>
-                          <button
-                            type="button"
-                            onClick={() => startEditing(t)}
-                            className="p-2.5 bg-cream-bg rounded-lg border border-slate-200 text-deep-forest hover:bg-mustard-gold hover:border-mustard-gold transition-all cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
-                            aria-label={`Edit ${t.name}`}
-                            title="Edit tournament"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setPendingDelete(t)}
-                            className="p-2.5 bg-cream-bg rounded-lg border border-slate-200 text-red-600 hover:bg-red-50 hover:border-red-300 transition-all cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
-                            aria-label={`Delete ${t.name}`}
-                            title="Delete tournament"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                          <Link
-                            href={`/tournaments/${t.id}`}
-                            className="p-2.5 bg-cream-bg rounded-lg border border-slate-200 text-deep-forest hover:bg-mustard-gold hover:border-mustard-gold transition-all min-h-[44px] min-w-[44px] flex items-center justify-center"
-                            aria-label={`Open ${t.name}`}
-                          >
-                            <ChevronRight className="w-4 h-4" />
-                          </Link>
-                        </div>
+                      {/* Action buttons row */}
+                      <div className="grid grid-cols-4 gap-2 mb-4 pt-1 pl-2">
+                        <Link
+                          href={`/live/${t.id}`}
+                          className="flex flex-col items-center justify-center gap-1.5 py-2 px-1 bg-emerald-50/40 hover:bg-emerald-50 text-emerald-800 rounded-xl border border-slate-200 hover:border-emerald-200 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-sm"
+                          aria-label={`Live board for ${t.name}`}
+                          title="Public live board"
+                        >
+                          <Radio className="w-4 h-4" />
+                          <span className="text-[9px] font-mono font-bold uppercase tracking-wide">Live</span>
+                        </Link>
+                        <button
+                          type="button"
+                          onClick={() => startEditing(t)}
+                          className="flex flex-col items-center justify-center gap-1.5 py-2 px-1 bg-amber-50/40 hover:bg-amber-50 text-amber-800 rounded-xl border border-slate-200 hover:border-amber-200 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 cursor-pointer shadow-sm"
+                          aria-label={`Edit ${t.name}`}
+                          title="Edit tournament"
+                        >
+                          <Pencil className="w-4 h-4" />
+                          <span className="text-[9px] font-mono font-bold uppercase tracking-wide">Edit</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPendingDelete(t)}
+                          className="flex flex-col items-center justify-center gap-1.5 py-2 px-1 bg-red-50/40 hover:bg-red-50 text-red-600 rounded-xl border border-slate-200 hover:border-red-200 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 cursor-pointer shadow-sm"
+                          aria-label={`Delete ${t.name}`}
+                          title="Delete tournament"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                          <span className="text-[9px] font-mono font-bold uppercase tracking-wide">Delete</span>
+                        </button>
+                        <Link
+                          href={`/tournaments/${t.id}`}
+                          className="flex flex-col items-center justify-center gap-1.5 py-2 px-1 bg-slate-50/40 hover:bg-slate-100 text-deep-forest rounded-xl border border-slate-200 hover:border-slate-300 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-sm"
+                          aria-label={`Open ${t.name}`}
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                          <span className="text-[9px] font-mono font-bold uppercase tracking-wide">Open</span>
+                        </Link>
                       </div>
 
                       <div className="mt-auto flex items-center justify-between text-[10px] font-mono text-deep-forest/60 border-t border-slate-100 pt-4 gap-4">

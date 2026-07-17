@@ -31,6 +31,9 @@ export const categoryDetailInclude = {
           cricketBalls: {
             orderBy: { createdAt: "asc" },
           },
+          matchSets: {
+            orderBy: { setNumber: "asc" },
+          },
         },
       },
     },

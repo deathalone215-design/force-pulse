@@ -10,23 +10,26 @@ datasource db {
 }
 
 model Tournament {
-  id               String               @id @default(uuid())
-  name             String
-  logoUrl          String?              // Base64 logo data URL
-  sport            String               @default("FOOTBALL") // FOOTBALL | CRICKET
-  oversPerInnings  Int?                 // Limited overs for cricket (e.g. 20)
-  startDate        DateTime
-  createdAt        DateTime             @default(now())
-  categories       TournamentCategory[]
+  id         String               @id @default(uuid())
+  name       String
+  logoUrl    String?              // Base64 logo or Supabase URL
+  startDate  DateTime
+  createdAt  DateTime             @default(now())
+  categories TournamentCategory[]
 }
 
 model TournamentCategory {
-  id           String     @id @default(uuid())
-  name         String     // e.g. U15, OPEN
-  tournamentId String
-  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
-  teams        Team[]
-  rounds       Round[]
+  id               String     @id @default(uuid())
+  name             String     // e.g. U15, OPEN
+  sport            String     @default("FOOTBALL") // FOOTBALL | CRICKET | VOLLEYBALL | BADMINTON | PICKLEBALL
+  oversPerInnings  Int?       // Limited overs for cricket categories
+  scheduleFormat   String     @default("ROUND_ROBIN") // ROUND_ROBIN | LEAGUE | KNOCKOUT | SWISS
+  tournamentId     String
+  tournament       Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  teams            Team[]
+  rounds           Round[]
+
+  @@unique([tournamentId, name, sport])
 }
 
 model Team {
@@ -66,9 +69,17 @@ model Match {
   teamA           Team          @relation("HomeTeam", fields: [teamAId], references: [id], onDelete: Cascade)
   teamBId         String
   teamB           Team          @relation("AwayTeam", fields: [teamBId], references: [id], onDelete: Cascade)
-  scoreA          Int           @default(0) // Football goals / cricket runs
+  scoreA          Int           @default(0) // Football goals / cricket runs / sets won
   scoreB          Int           @default(0)
   status          String        @default("SCHEDULED") // SCHEDULED, LIVE, COMPLETED
+  kickoffAt       DateTime?     // Football clock start (set when match goes LIVE)
+  clockPausedAt   DateTime?     // When set, match clock is frozen (injury / interruption)
+  pausedSeconds   Int           @default(0) // Total completed pause time subtracted from clock
+  stoppageMinutes Int           @default(0) // Announced stoppage / added time (+N')
+  penaltyScoreA   Int           @default(0) // Penalty shootout scored (team A)
+  penaltyScoreB   Int           @default(0) // Penalty shootout scored (team B)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @default(now()) @updatedAt
   // Cricket-specific
   oversLimit      Int?
   currentInnings  Int           @default(1)
@@ -81,8 +92,23 @@ model Match {
   ballsFacedA     Int           @default(0) // Legal balls only
   ballsFacedB     Int           @default(0)
   inningsComplete Int           @default(0) // 0 = none, 1 = first done, 2 = both done
+  // Set-based sports (Volleyball, Badminton, Pickleball)
+  currentSet      Int           @default(1)
+  servingTeamId   String?
   events          MatchEvent[]
   cricketBalls    CricketBall[]
+  matchSets       MatchSet[]
+}
+
+model MatchSet {
+  id        String   @id @default(uuid())
+  matchId   String
+  match     Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  setNumber Int
+  scoreA    Int      @default(0)
+  scoreB    Int      @default(0)
+  winnerId  String?  // teamAId, teamBId, or null if in progress
+  createdAt DateTime @default(now())
 }
 
 model MatchEvent {

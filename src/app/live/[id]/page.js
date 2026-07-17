@@ -23,7 +23,39 @@ import {
   calculateCricketLeaders,
   calculateCricketStandings,
   inningsTotals,
+  computeBatterStats,
+  computeBowlerStats,
+  computeCurrentRunRate,
+  computeRequiredRunRate,
+  computeProjectedScore,
+  computePartnership,
+  getCurrentOverBalls,
+  getLastNOversRuns,
+  ballDisplayLabel,
+  ballDisplayColor,
+  oversToMaxBalls,
+  ballsRemaining,
 } from "@/lib/cricket";
+import {
+  isSetBasedSport,
+  calculateSetBasedStandings,
+  SPORT_CONFIGS,
+  getSetTarget,
+} from "@/lib/setBasedSports";
+import { categoryDisplayName } from "@/lib/sports";
+import { isPlaceholderTeam } from "@/lib/tournamentResolver";
+import { getRoundDisplayName } from "@/lib/scheduleFormats";
+import {
+  formatFootballClock,
+  footballElapsedSeconds,
+  footballDisplayMinute,
+  footballClockOpts,
+  isFootballClockPaused,
+  formatEventMinute,
+} from "@/lib/footballClock";
+
+const getRoundName = (number, totalRounds, format) =>
+  getRoundDisplayName(number, totalRounds, format);
 
 function withTeamLogo(team, category) {
   if (!team) return team;
@@ -32,36 +64,6 @@ function withTeamLogo(team, category) {
   if (fromCat?.logoUrl) return { ...team, logoUrl: fromCat.logoUrl };
   return team;
 }
-
-const isPlaceholderTeam = (name) => {
-  if (!name) return false;
-  const norm = name.toLowerCase().trim();
-  return (
-    norm.includes("tbd") ||
-    [
-      "1st placed team",
-      "2nd placed team",
-      "3rd placed team",
-      "4th placed team",
-      "winner sf1",
-      "winner sf2",
-      "winner first",
-      "winner second",
-      "w1",
-      "w2",
-    ].some((p) => norm.includes(p))
-  );
-};
-
-const getRoundName = (number, totalRounds) => {
-  if (totalRounds === 4) {
-    if (number === 1) return "Saturday League";
-    if (number === 2) return "Sunday League";
-    if (number === 3) return "Semi-Finals";
-    if (number === 4) return "Final";
-  }
-  return `Round ${number}`;
-};
 
 const getTeamGradient = (name) => {
   if (!name) return "linear-gradient(135deg, #0d472c, #093c24)";
@@ -197,37 +199,917 @@ function TeamBadge({ team, size = "md" }) {
 
 function CricketScoreBlock({ match, teamId, compact }) {
   const tot = inningsTotals(match, teamId);
-  const hasBatted =
-    tot.legalBalls > 0 ||
-    tot.runs > 0 ||
-    tot.wickets > 0 ||
-    match.battingTeamId === teamId ||
-    match.status === "COMPLETED";
-  if (!hasBatted && match.status === "SCHEDULED") {
-    return (
-      <span className="font-mono text-[10px] text-slate-400 uppercase">Yet to bat</span>
-    );
-  }
-  if (!hasBatted && match.status === "LIVE" && match.battingTeamId !== teamId) {
-    return (
-      <span className="font-mono text-[10px] text-slate-400 uppercase">Yet to bat</span>
-    );
-  }
+  const hasBatted = tot.legalBalls > 0 || tot.runs > 0 || tot.wickets > 0 || match.battingTeamId === teamId || match.status === "COMPLETED";
+  if (!hasBatted && match.status === "SCHEDULED") return <span className="font-mono text-[10px] text-slate-400 uppercase">Yet to bat</span>;
+  if (!hasBatted && match.status === "LIVE" && match.battingTeamId !== teamId) return <span className="font-mono text-[10px] text-slate-400 uppercase">Yet to bat</span>;
   return (
     <div className="text-center">
-      <span
-        className={`font-mono font-bold text-white bg-[#0a331f] rounded-xl shadow border border-black inline-block ${
-          compact
-            ? "text-base px-2 py-1.5"
-            : "text-xl sm:text-2xl px-3 py-2"
-        }`}
-      >
+      <span className={`font-mono font-bold text-white bg-[#0a331f] rounded-xl shadow border border-black inline-block ${compact ? "text-base px-2 py-1.5" : "text-xl sm:text-2xl px-3 py-2"}`}>
         {tot.runs}/{tot.wickets}
       </span>
-      <p className="text-[9px] font-mono text-deep-forest/50 mt-1">
-        ({ballsToOvers(tot.legalBalls)}
-        {match.oversLimit ? `/${match.oversLimit}` : ""})
-      </p>
+      <p className="text-[9px] font-mono text-deep-forest/50 mt-1">({ballsToOvers(tot.legalBalls)}{match.oversLimit ? `/${match.oversLimit}` : ""})</p>
+    </div>
+  );
+}
+
+function BallDot({ ball, size = "md" }) {
+  const label = ballDisplayLabel(ball);
+  const color = ballDisplayColor(ball);
+  const sizeClass =
+    size === "lg"
+      ? "w-9 h-9 text-[11px]"
+      : "w-8 h-8 text-[10px]";
+  return (
+    <span
+      className={`inline-flex items-center justify-center ${sizeClass} rounded-full border font-mono font-bold leading-none ${color}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function CricketLiveCard({ match }) {
+  const allBalls = match.cricketBalls || [];
+  const oversLimit = match.oversLimit || 20;
+  const batting = match.battingTeamId;
+  const allPlayers = [
+    ...(match.teamA?.players || []),
+    ...(match.teamB?.players || []),
+  ];
+
+  const findPlayer = (id) => allPlayers.find((p) => p.id === id);
+  const battingTeam = batting === match.teamAId ? match.teamA : match.teamB;
+  const bowlingTeam = batting === match.teamAId ? match.teamB : match.teamA;
+
+  const inningsBalls = allBalls.filter((b) => b.innings === match.currentInnings);
+  const tot = batting ? inningsTotals(match, batting) : null;
+
+  const firstInningsTeam = allBalls.find((b) => b.innings === 1)?.battingTeamId;
+  const firstInningsScore =
+    firstInningsTeam === match.teamAId ? match.scoreA : match.scoreB;
+  const firstInningsWkts =
+    firstInningsTeam === match.teamAId ? match.wicketsA : match.wicketsB;
+  const firstInningsBalls =
+    firstInningsTeam === match.teamAId ? match.ballsFacedA : match.ballsFacedB;
+
+  const target =
+    match.currentInnings === 2 && batting
+      ? (batting === match.teamAId ? match.scoreB : match.scoreA) + 1
+      : null;
+  const runsNeeded =
+    target != null && tot ? Math.max(0, target - tot.runs) : null;
+  const ballsLeft = tot ? ballsRemaining(match, batting) : 0;
+
+  const crr = tot ? computeCurrentRunRate(tot.runs, tot.legalBalls) : "0.00";
+  const rrr =
+    runsNeeded != null ? computeRequiredRunRate(runsNeeded, ballsLeft) : null;
+  const projected =
+    match.currentInnings === 1 && tot
+      ? computeProjectedScore(
+          tot.runs,
+          tot.legalBalls,
+          oversToMaxBalls(oversLimit)
+        )
+      : null;
+
+  const strikerStats = match.strikerId
+    ? computeBatterStats(inningsBalls, match.strikerId)
+    : null;
+  const nonStrikerStats = match.nonStrikerId
+    ? computeBatterStats(inningsBalls, match.nonStrikerId)
+    : null;
+  const bowlerStats = match.bowlerId
+    ? computeBowlerStats(inningsBalls, match.bowlerId)
+    : null;
+  const partnership =
+    match.strikerId && match.nonStrikerId
+      ? computePartnership(
+          allBalls,
+          match.strikerId,
+          match.nonStrikerId,
+          match.currentInnings
+        )
+      : null;
+
+  const currentOverBalls = tot
+    ? getCurrentOverBalls(allBalls, match.currentInnings, tot.legalBalls)
+    : [];
+  const lastOvers = getLastNOversRuns(allBalls, match.currentInnings, 5);
+  const overRuns = currentOverBalls.reduce((s, b) => s + (b.runsTotal || 0), 0);
+
+  const strikerPlayer = findPlayer(match.strikerId);
+  const nonStrikerPlayer = findPlayer(match.nonStrikerId);
+  const bowlerPlayer = findPlayer(match.bowlerId);
+
+  const isLive = match.status === "LIVE";
+  const isCompleted = match.status === "COMPLETED";
+  const oversNow = ballsToOvers(tot?.legalBalls ?? 0);
+
+  if (isCompleted) {
+    return (
+      <div className="rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm">
+        <div className="bg-[#0a331f] px-3 py-2 flex items-center justify-between">
+          <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-mustard-gold">
+            Result
+          </span>
+          <span className="text-[9px] font-mono text-white/50 uppercase">
+            {oversLimit} ov
+          </span>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {[
+            {
+              team: match.teamA,
+              runs: match.scoreA,
+              wkts: match.wicketsA,
+              balls: match.ballsFacedA,
+            },
+            {
+              team: match.teamB,
+              runs: match.scoreB,
+              wkts: match.wicketsB,
+              balls: match.ballsFacedB,
+            },
+          ].map(
+            ({ team, runs, wkts, balls }) =>
+              team && (
+                <div
+                  key={team.id}
+                  className="flex items-center justify-between px-3.5 py-3 gap-3"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    {team.logoUrl ? (
+                      <img
+                        src={team.logoUrl}
+                        alt=""
+                        className="w-8 h-8 rounded-full object-cover border border-slate-200 shrink-0"
+                      />
+                    ) : (
+                      <span className="w-8 h-8 rounded-full bg-[#0d472c] text-white text-[10px] font-bold flex items-center justify-center shrink-0">
+                        {(team.name || "??").slice(0, 2).toUpperCase()}
+                      </span>
+                    )}
+                    <p className="text-sm font-semibold text-deep-forest truncate">
+                      {team.name}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-lg font-mono font-bold text-deep-forest tabular-nums">
+                      {runs}
+                      <span className="text-deep-forest/40">/{wkts}</span>
+                    </p>
+                    <p className="text-[10px] font-mono text-slate-400">
+                      ({ballsToOvers(balls)} ov)
+                    </p>
+                  </div>
+                </div>
+              )
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl overflow-hidden border border-[#0d472c]/25 bg-white shadow-md">
+      {/* Header strip — Cricbuzz style */}
+      <div className="bg-gradient-to-r from-[#0a331f] via-[#0d472c] to-[#0a331f] px-3.5 py-3 text-white">
+        <div className="flex items-center justify-between gap-2 mb-2.5">
+          <div className="flex items-center gap-2">
+            {isLive && (
+              <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold uppercase tracking-wider bg-red-600 text-white px-2 py-0.5 rounded">
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                Live
+              </span>
+            )}
+            <span className="text-[9px] font-mono text-white/55 uppercase tracking-wider">
+              Inn {match.currentInnings}
+              {match.currentInnings === 2 ? " · Chase" : " · Bat"}
+            </span>
+          </div>
+          <span className="text-[9px] font-mono text-mustard-gold/90 font-bold uppercase">
+            {oversLimit} Overs
+          </span>
+        </div>
+
+        {batting && (
+          <div className="flex items-end justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] sm:text-sm font-semibold tracking-wide truncate">
+                {battingTeam?.name}
+              </p>
+              <div className="flex items-baseline gap-2 mt-1">
+                <span className="text-3xl sm:text-4xl font-mono font-bold text-mustard-gold tabular-nums leading-none">
+                  {tot?.runs ?? 0}
+                  <span className="text-white/50 text-2xl">/{tot?.wickets ?? 0}</span>
+                </span>
+                <span className="text-xs font-mono text-white/55">
+                  ({oversNow}/{oversLimit})
+                </span>
+              </div>
+            </div>
+            <div className="text-right shrink-0 space-y-0.5">
+              <p className="text-[9px] font-mono text-white/40 uppercase">CRR</p>
+              <p className="text-base font-mono font-bold text-white tabular-nums">
+                {crr}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Opponent / 1st innings line */}
+        <div className="mt-2.5 pt-2 border-t border-white/10 flex items-center justify-between gap-2 text-[10px] font-mono text-white/55">
+          {match.currentInnings === 2 && firstInningsTeam ? (
+            <>
+              <span className="truncate">
+                {bowlingTeam?.name}{" "}
+                <span className="text-white/80 font-bold">
+                  {firstInningsScore}/{firstInningsWkts}
+                </span>
+              </span>
+              <span>({ballsToOvers(firstInningsBalls)})</span>
+            </>
+          ) : (
+            <>
+              <span className="truncate">{bowlingTeam?.name}</span>
+              <span className="uppercase tracking-wider text-white/40">
+                Yet to bat
+              </span>
+            </>
+          )}
+        </div>
+
+        {/* Chase strip */}
+        {isLive && target != null && (
+          <div className="mt-2.5 rounded-lg bg-black/25 px-2.5 py-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] font-mono">
+              <span>
+                <span className="text-white/40">Target </span>
+                <span className="font-bold text-mustard-gold">{target}</span>
+              </span>
+              <span>
+                <span className="text-white/40">Need </span>
+                <span className="font-bold text-white">
+                  {runsNeeded} runs
+                </span>
+              </span>
+              <span>
+                <span className="text-white/40">in </span>
+                <span className="font-bold text-white">{ballsLeft} balls</span>
+              </span>
+            </div>
+            {rrr && (
+              <span className="text-[10px] font-mono">
+                <span className="text-white/40">RRR </span>
+                <span className="font-bold text-red-300">{rrr}</span>
+              </span>
+            )}
+          </div>
+        )}
+
+        {isLive && projected != null && target == null && (
+          <div className="mt-2 text-[10px] font-mono text-white/50">
+            Projected{" "}
+            <span className="font-bold text-sky-300">~{projected}</span>
+          </div>
+        )}
+      </div>
+
+      {/* This over */}
+      {isLive && (
+        <div className="px-3.5 py-3 bg-[#f8faf8] border-b border-slate-100">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-deep-forest/55">
+              This over
+              <span className="ml-1.5 text-deep-forest/35 font-normal normal-case tracking-normal">
+                {oversNow} · {overRuns} run{overRuns === 1 ? "" : "s"}
+              </span>
+            </p>
+            {partnership && (
+              <p className="text-[10px] font-mono text-deep-forest/50">
+                Pship{" "}
+                <span className="font-bold text-deep-forest">
+                  {partnership.runs}
+                </span>
+                <span className="text-deep-forest/40">
+                  ({partnership.balls})
+                </span>
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-1.5 items-center">
+            {currentOverBalls.length === 0 ? (
+              <span className="text-[10px] font-mono text-slate-400">
+                Over starting…
+              </span>
+            ) : (
+              currentOverBalls.map((b, i) => (
+                <BallDot key={b.id || i} ball={b} size="lg" />
+              ))
+            )}
+            {Array.from({
+              length: Math.max(0, 6 - currentOverBalls.filter((b) => b.isLegal).length),
+            }).map((_, i) => (
+              <span
+                key={`empty-${i}`}
+                className="inline-flex w-9 h-9 rounded-full border border-dashed border-slate-300 text-slate-300 items-center justify-center text-[10px] font-mono"
+              >
+                ·
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Batters table */}
+      {isLive && (strikerPlayer || nonStrikerPlayer) && (
+        <div className="border-b border-slate-100">
+          <div className="grid grid-cols-[1fr_2.2rem_2.2rem_1.8rem_1.8rem_3rem] gap-1 px-3.5 py-1.5 bg-slate-50 text-[8px] font-mono uppercase tracking-wider text-slate-400 font-bold">
+            <span>Batter</span>
+            <span className="text-right">R</span>
+            <span className="text-right">B</span>
+            <span className="text-right">4s</span>
+            <span className="text-right">6s</span>
+            <span className="text-right">SR</span>
+          </div>
+          {[
+            { player: strikerPlayer, stats: strikerStats, onStrike: true },
+            { player: nonStrikerPlayer, stats: nonStrikerStats, onStrike: false },
+          ]
+            .filter((x) => x.player)
+            .map(({ player, stats, onStrike }) => (
+              <div
+                key={player.id}
+                className={`grid grid-cols-[1fr_2.2rem_2.2rem_1.8rem_1.8rem_3rem] gap-1 px-3.5 py-2.5 items-center ${
+                  onStrike ? "bg-[#0d472c]/[0.06]" : "bg-white"
+                }`}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <span
+                    className={`w-5 h-5 rounded text-[8px] font-mono font-bold flex items-center justify-center shrink-0 ${
+                      onStrike
+                        ? "bg-mustard-gold text-deep-forest"
+                        : "bg-slate-100 text-slate-500"
+                    }`}
+                  >
+                    {player.shirtNumber ?? "·"}
+                  </span>
+                  <span
+                    className={`text-[12px] font-semibold truncate ${
+                      onStrike ? "text-deep-forest" : "text-slate-700"
+                    }`}
+                  >
+                    {player.name}
+                    {onStrike ? (
+                      <span className="text-mustard-gold-hover ml-0.5">*</span>
+                    ) : null}
+                  </span>
+                </div>
+                <span className="text-right text-sm font-mono font-bold text-deep-forest tabular-nums">
+                  {stats?.runs ?? 0}
+                </span>
+                <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
+                  {stats?.ballsFaced ?? 0}
+                </span>
+                <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
+                  {stats?.fours ?? 0}
+                </span>
+                <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
+                  {stats?.sixes ?? 0}
+                </span>
+                <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
+                  {stats?.sr ?? "—"}
+                </span>
+              </div>
+            ))}
+        </div>
+      )}
+
+      {/* Bowler row */}
+      {isLive && bowlerPlayer && bowlerStats && (
+        <div className="border-b border-slate-100">
+          <div className="grid grid-cols-[1fr_2.5rem_1.8rem_2.2rem_1.8rem_3rem] gap-1 px-3.5 py-1.5 bg-slate-50 text-[8px] font-mono uppercase tracking-wider text-slate-400 font-bold">
+            <span>Bowler</span>
+            <span className="text-right">O</span>
+            <span className="text-right">M</span>
+            <span className="text-right">R</span>
+            <span className="text-right">W</span>
+            <span className="text-right">Econ</span>
+          </div>
+          <div className="grid grid-cols-[1fr_2.5rem_1.8rem_2.2rem_1.8rem_3rem] gap-1 px-3.5 py-2.5 items-center">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="w-5 h-5 rounded bg-[#7c3aed]/15 text-[#6d28d9] text-[8px] font-mono font-bold flex items-center justify-center shrink-0">
+                {bowlerPlayer.shirtNumber ?? "·"}
+              </span>
+              <span className="text-[12px] font-semibold text-deep-forest truncate">
+                {bowlerPlayer.name}
+              </span>
+            </div>
+            <span className="text-right text-[11px] font-mono font-bold text-deep-forest tabular-nums">
+              {bowlerStats.oversStr}
+            </span>
+            <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
+              {bowlerStats.maidens}
+            </span>
+            <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
+              {bowlerStats.runs}
+            </span>
+            <span className="text-right text-[11px] font-mono font-bold text-deep-forest tabular-nums">
+              {bowlerStats.wickets}
+            </span>
+            <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
+              {bowlerStats.economy}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Recent overs */}
+      {isLive && lastOvers.length > 0 && (
+        <div className="px-3.5 py-2.5 flex items-center gap-2 flex-wrap bg-white">
+          <span className="text-[8px] font-mono uppercase tracking-widest text-slate-400 font-bold shrink-0">
+            Recent
+          </span>
+          {lastOvers.map((o) => (
+            <span
+              key={o.over}
+              className="text-[10px] font-mono bg-slate-50 border border-slate-200 rounded-md px-2 py-0.5 text-slate-600"
+            >
+              {o.over}
+              <span className="text-slate-300 mx-0.5">·</span>
+              <span className="font-bold text-deep-forest">
+                {o.runs}
+                {o.wkts > 0 ? `/${o.wkts}W` : ""}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SetScoreBlock({ match, compact }) {
+  const sets = match.matchSets || [];
+  const completedSets = sets.filter((s) => s.winnerId);
+  const currentSet = sets.find((s) => s.setNumber === match.currentSet);
+
+  if (match.status === "SCHEDULED" && sets.length === 0) {
+    return <span className="font-mono text-[10px] text-slate-400 uppercase">Upcoming</span>;
+  }
+
+  return (
+    <div className="text-center space-y-1">
+      <div className="flex items-center justify-center gap-1">
+        <span className={`font-mono font-bold text-white bg-[#0a331f] rounded-xl shadow border border-black inline-block ${compact ? "text-base px-2 py-1.5" : "text-xl sm:text-2xl px-3 py-2"}`}>
+          {match.scoreA}
+        </span>
+        <span className="text-slate-300 font-mono text-xs">–</span>
+        <span className={`font-mono font-bold text-white bg-[#0a331f] rounded-xl shadow border border-black inline-block ${compact ? "text-base px-2 py-1.5" : "text-xl sm:text-2xl px-3 py-2"}`}>
+          {match.scoreB}
+        </span>
+      </div>
+      {currentSet && match.status === "LIVE" && (
+        <p className="text-[9px] font-mono text-deep-forest/50">
+          Set {currentSet.setNumber}: {currentSet.scoreA}–{currentSet.scoreB}
+        </p>
+      )}
+      {completedSets.length > 0 && !compact && (
+        <div className="flex flex-wrap gap-1 justify-center">
+          {completedSets.map((s) => (
+            <span key={s.id || s.setNumber} className="text-[8px] font-mono text-deep-forest/40 bg-slate-100 rounded px-1.5 py-0.5">
+              {s.scoreA}–{s.scoreB}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function eventLabel(type) {
+  const t = String(type || "").toUpperCase();
+  if (t === "GOAL") return "Goal";
+  if (t === "OWN_GOAL") return "Own goal";
+  if (t === "PENALTY_GOAL") return "Penalty";
+  if (t === "PENALTY_MISS") return "Pen miss";
+  if (t === "SHOOTOUT_SCORED") return "Shootout ✓";
+  if (t === "SHOOTOUT_MISSED") return "Shootout ✗";
+  if (t === "YELLOW_CARD") return "Yellow";
+  if (t === "RED_CARD") return "Red";
+  return t.replace(/_/g, " ");
+}
+
+function eventAccent(type) {
+  const t = String(type || "").toUpperCase();
+  if (t === "GOAL" || t === "PENALTY_GOAL" || t === "SHOOTOUT_SCORED")
+    return "bg-emerald-500";
+  if (t === "OWN_GOAL") return "bg-slate-500";
+  if (t === "PENALTY_MISS" || t === "SHOOTOUT_MISSED") return "bg-red-500";
+  if (t === "YELLOW_CARD") return "bg-yellow-400";
+  if (t === "RED_CARD") return "bg-red-500";
+  return "bg-slate-400";
+}
+
+/** Sofascore-style football live board */
+function FootballLiveCard({ match }) {
+  const isLive = match.status === "LIVE";
+  const isCompleted = match.status === "COMPLETED";
+  const teamA = match.teamA;
+  const teamB = match.teamB;
+  const [now, setNow] = useState(() => Date.now());
+  const clockOpts = footballClockOpts(match);
+  const clockPaused = isFootballClockPaused(match);
+
+  useEffect(() => {
+    if (!isLive || !match.kickoffAt || clockPaused) return undefined;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [isLive, match.kickoffAt, clockPaused]);
+
+  const elapsed = footballElapsedSeconds(match.kickoffAt, now, clockOpts);
+  const clockLabel = match.kickoffAt
+    ? formatFootballClock(elapsed)
+    : isLive
+      ? "00:00"
+      : null;
+  const minuteLabel = match.kickoffAt
+    ? `${footballDisplayMinute(match.kickoffAt, now, clockOpts)}'`
+    : null;
+
+  const events = [...(match.events || [])].sort((a, b) => {
+    const ma = a.minute ?? 999;
+    const mb = b.minute ?? 999;
+    if (ma !== mb) return ma - mb;
+    return (a.createdAt || "").localeCompare(b.createdAt || "");
+  });
+  const goals = events.filter((e) => {
+    const t = String(e.type || "").toUpperCase();
+    return t === "GOAL" || t === "OWN_GOAL";
+  });
+
+  return (
+    <div className="rounded-2xl overflow-hidden border border-[#0d472c]/25 bg-white shadow-md">
+      <div className="bg-gradient-to-r from-[#0a331f] via-[#0d472c] to-[#0a331f] px-3.5 py-3 text-white">
+        <div className="flex items-center justify-between mb-3">
+          {isLive ? (
+            clockPaused ? (
+              <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold uppercase tracking-wider bg-amber-500 text-white px-2 py-0.5 rounded">
+                Paused
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold uppercase tracking-wider bg-red-600 text-white px-2 py-0.5 rounded">
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                Live
+              </span>
+            )
+          ) : (
+            <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-white/50">
+              {isCompleted ? "Full time" : match.status}
+            </span>
+          )}
+          <span className="text-[9px] font-mono text-mustard-gold/90 font-bold uppercase">
+            Football
+          </span>
+        </div>
+
+        {/* Match timer */}
+        {(isLive || (isCompleted && match.kickoffAt)) && (
+          <div className="mb-3 flex items-center justify-center gap-2 flex-wrap">
+            <div
+              className={`inline-flex items-center gap-2 bg-black/30 border rounded-xl px-4 py-1.5 ${
+                clockPaused ? "border-amber-400/50" : "border-white/10"
+              }`}
+            >
+              <span className="text-[8px] font-mono uppercase tracking-widest text-white/45">
+                {isCompleted ? "FT clock" : clockPaused ? "Paused" : "Time"}
+              </span>
+              <span
+                className={`text-xl sm:text-2xl font-mono font-bold tabular-nums tracking-wider ${
+                  clockPaused ? "text-amber-300" : "text-mustard-gold"
+                }`}
+              >
+                {clockLabel || "00:00"}
+              </span>
+              {isLive && minuteLabel != null && (
+                <span className="text-[10px] font-mono text-white/50">
+                  ({minuteLabel})
+                </span>
+              )}
+            </div>
+            {(match.stoppageMinutes || 0) > 0 && (
+              <span className="inline-flex items-center bg-mustard-gold text-deep-forest text-xs font-mono font-bold px-2.5 py-1.5 rounded-lg">
+                +{match.stoppageMinutes}&apos;
+              </span>
+            )}
+          </div>
+        )}
+
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+          <div className="flex flex-col items-center gap-1.5 min-w-0 text-center">
+            {teamA?.logoUrl ? (
+              <img
+                src={teamA.logoUrl}
+                alt=""
+                className="w-11 h-11 rounded-full object-cover border-2 border-white/20"
+              />
+            ) : (
+              <span className="w-11 h-11 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-xs font-bold">
+                {(teamA?.name || "??").slice(0, 2).toUpperCase()}
+              </span>
+            )}
+            <p className="text-[11px] sm:text-xs font-semibold leading-tight line-clamp-2">
+              {teamA?.name || "TBD"}
+            </p>
+          </div>
+
+          <div className="text-center px-1">
+            <div className="flex items-baseline justify-center gap-1.5 font-mono font-bold tabular-nums">
+              <span className="text-3xl sm:text-4xl text-mustard-gold">{match.scoreA}</span>
+              <span className="text-white/35 text-lg">:</span>
+              <span className="text-3xl sm:text-4xl text-mustard-gold">{match.scoreB}</span>
+            </div>
+            <p className="text-[9px] font-mono text-white/40 uppercase mt-1 tracking-wider">
+              {isLive ? "Match in progress" : isCompleted ? "FT" : "Score"}
+            </p>
+          </div>
+
+          <div className="flex flex-col items-center gap-1.5 min-w-0 text-center">
+            {teamB?.logoUrl ? (
+              <img
+                src={teamB.logoUrl}
+                alt=""
+                className="w-11 h-11 rounded-full object-cover border-2 border-white/20"
+              />
+            ) : (
+              <span className="w-11 h-11 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-xs font-bold">
+                {(teamB?.name || "??").slice(0, 2).toUpperCase()}
+              </span>
+            )}
+            <p className="text-[11px] sm:text-xs font-semibold leading-tight line-clamp-2">
+              {teamB?.name || "TBD"}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Goal scorers strip */}
+      {goals.length > 0 && (
+        <div className="px-3.5 py-2.5 bg-[#f8faf8] border-b border-slate-100">
+          <p className="text-[8px] font-mono uppercase tracking-widest text-slate-400 font-bold mb-1.5">
+            Goals
+          </p>
+          <div className="space-y-1">
+            {goals.map((e) => {
+              const isA = e.teamId === match.teamAId;
+              const name = e.player?.name || "Unknown";
+              const t = String(e.type || "").toUpperCase();
+              const tag = t === "OWN_GOAL" ? " (OG)" : "";
+              return (
+                <div
+                  key={e.id}
+                  className={`flex items-center gap-2 text-[11px] font-mono ${
+                    isA ? "justify-start" : "justify-end flex-row-reverse"
+                  }`}
+                >
+                  <span className="text-slate-400 tabular-nums w-10 shrink-0">
+                    {formatEventMinute(e.minute, match.stoppageMinutes)}
+                  </span>
+                  <span
+                    className={`font-semibold text-deep-forest truncate ${
+                      isA ? "text-left" : "text-right"
+                    }`}
+                  >
+                    {name}
+                    {tag}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Event timeline */}
+      {events.length > 0 && (
+        <div className="px-3.5 py-3">
+          <p className="text-[8px] font-mono uppercase tracking-widest text-slate-400 font-bold mb-2">
+            Match events
+          </p>
+          <ul className="space-y-1.5 max-h-40 overflow-y-auto">
+            {[...events].reverse().map((e) => (
+              <li
+                key={e.id}
+                className="flex items-center gap-2 text-[11px] bg-slate-50 border border-slate-100 rounded-lg px-2.5 py-1.5"
+              >
+                <span
+                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${eventAccent(e.type)}`}
+                />
+                <span className="font-mono text-slate-400 tabular-nums w-10 shrink-0">
+                  {formatEventMinute(e.minute, match.stoppageMinutes)}
+                </span>
+                <span className="font-semibold text-deep-forest truncate flex-1">
+                  {e.player?.name || "—"}
+                </span>
+                <span className="text-[9px] font-mono uppercase text-slate-500 shrink-0">
+                  {eventLabel(e.type)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {events.length === 0 && (
+        <div className="px-3.5 py-4 text-center text-[10px] font-mono text-slate-400">
+          {isLive ? "Waiting for first event…" : "No events recorded"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Volleyball / Badminton / Pickleball live board */
+function SetBasedLiveCard({ match, sport }) {
+  const config = SPORT_CONFIGS[sport] || SPORT_CONFIGS.VOLLEYBALL;
+  const isLive = match.status === "LIVE";
+  const isCompleted = match.status === "COMPLETED";
+  const sets = [...(match.matchSets || [])].sort(
+    (a, b) => a.setNumber - b.setNumber
+  );
+  const currentSetNum = match.currentSet || 1;
+  const currentSet =
+    sets.find((s) => s.setNumber === currentSetNum) || {
+      setNumber: currentSetNum,
+      scoreA: 0,
+      scoreB: 0,
+      winnerId: null,
+    };
+  const completedSets = sets.filter((s) => s.winnerId);
+  const target = getSetTarget(currentSetNum, config);
+  const teamA = match.teamA;
+  const teamB = match.teamB;
+
+  return (
+    <div className="rounded-2xl overflow-hidden border border-[#0d472c]/25 bg-white shadow-md">
+      <div className="bg-gradient-to-r from-[#0a331f] via-[#0d472c] to-[#0a331f] px-3.5 py-3 text-white">
+        <div className="flex items-center justify-between mb-3">
+          {isLive ? (
+            <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold uppercase tracking-wider bg-red-600 text-white px-2 py-0.5 rounded">
+              <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+              Live
+            </span>
+          ) : (
+            <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-white/50">
+              {isCompleted ? "Final" : match.status}
+            </span>
+          )}
+          <span className="text-[9px] font-mono text-mustard-gold/90 font-bold uppercase">
+            {config.icon} {config.name}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+          <div className="flex flex-col items-center gap-1.5 min-w-0 text-center">
+            {teamA?.logoUrl ? (
+              <img
+                src={teamA.logoUrl}
+                alt=""
+                className="w-11 h-11 rounded-full object-cover border-2 border-white/20"
+              />
+            ) : (
+              <span className="w-11 h-11 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-xs font-bold">
+                {(teamA?.name || "??").slice(0, 2).toUpperCase()}
+              </span>
+            )}
+            <p className="text-[11px] sm:text-xs font-semibold leading-tight line-clamp-2">
+              {teamA?.name || "TBD"}
+            </p>
+          </div>
+
+          <div className="text-center px-1">
+            <p className="text-[8px] font-mono text-white/40 uppercase tracking-wider mb-0.5">
+              Sets
+            </p>
+            <div className="flex items-baseline justify-center gap-1.5 font-mono font-bold tabular-nums">
+              <span className="text-3xl sm:text-4xl text-mustard-gold">
+                {match.scoreA}
+              </span>
+              <span className="text-white/35 text-lg">–</span>
+              <span className="text-3xl sm:text-4xl text-mustard-gold">
+                {match.scoreB}
+              </span>
+            </div>
+            <p className="text-[9px] font-mono text-white/40 mt-1">
+              First to {config.setsToWin}
+            </p>
+          </div>
+
+          <div className="flex flex-col items-center gap-1.5 min-w-0 text-center">
+            {teamB?.logoUrl ? (
+              <img
+                src={teamB.logoUrl}
+                alt=""
+                className="w-11 h-11 rounded-full object-cover border-2 border-white/20"
+              />
+            ) : (
+              <span className="w-11 h-11 rounded-full bg-white/10 border border-white/20 flex items-center justify-center text-xs font-bold">
+                {(teamB?.name || "??").slice(0, 2).toUpperCase()}
+              </span>
+            )}
+            <p className="text-[11px] sm:text-xs font-semibold leading-tight line-clamp-2">
+              {teamB?.name || "TBD"}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Current set score */}
+      {isLive && (
+        <div className="px-3.5 py-4 bg-[#f8faf8] border-b border-slate-100 text-center">
+          <p className="text-[8px] font-mono uppercase tracking-widest text-slate-400 font-bold mb-2">
+            Set {currentSetNum} · Play to {target}
+            {config.winByTwo ? " (win by 2)" : ""}
+          </p>
+          <div className="flex items-center justify-center gap-4">
+            <span className="text-4xl font-mono font-bold text-deep-forest tabular-nums">
+              {currentSet.scoreA}
+            </span>
+            <span className="text-slate-300 font-mono text-xl">:</span>
+            <span className="text-4xl font-mono font-bold text-deep-forest tabular-nums">
+              {currentSet.scoreB}
+            </span>
+          </div>
+          <div className="mt-3 h-1.5 max-w-[200px] mx-auto bg-slate-200 rounded-full overflow-hidden flex">
+            <div
+              className="h-full bg-[#0d472c] transition-all"
+              style={{
+                width: `${
+                  currentSet.scoreA + currentSet.scoreB === 0
+                    ? 50
+                    : (currentSet.scoreA /
+                        (currentSet.scoreA + currentSet.scoreB)) *
+                      100
+                }%`,
+              }}
+            />
+            <div className="h-full bg-mustard-gold flex-1" />
+          </div>
+        </div>
+      )}
+
+      {/* Set history */}
+      <div className="px-3.5 py-3">
+        <p className="text-[8px] font-mono uppercase tracking-widest text-slate-400 font-bold mb-2">
+          Set scores
+        </p>
+        {sets.length === 0 ? (
+          <p className="text-[10px] font-mono text-slate-400 text-center py-2">
+            {isLive ? "Set 1 starting…" : "No sets yet"}
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-2 justify-center">
+            {sets.map((s) => {
+              const done = !!s.winnerId;
+              const isCurrent = !done && s.setNumber === currentSetNum && isLive;
+              return (
+                <div
+                  key={s.id || s.setNumber}
+                  className={`min-w-[4.5rem] rounded-xl border px-2.5 py-2 text-center ${
+                    isCurrent
+                      ? "border-mustard-gold bg-mustard-gold/10 ring-1 ring-mustard-gold/40"
+                      : done
+                        ? "border-slate-200 bg-white"
+                        : "border-dashed border-slate-200 bg-slate-50"
+                  }`}
+                >
+                  <p className="text-[8px] font-mono uppercase text-slate-400 font-bold">
+                    Set {s.setNumber}
+                  </p>
+                  <p className="text-sm font-mono font-bold text-deep-forest tabular-nums mt-0.5">
+                    {s.scoreA}–{s.scoreB}
+                  </p>
+                  {done && (
+                    <p className="text-[8px] font-mono text-emerald-600 mt-0.5">
+                      {s.winnerId === match.teamAId
+                        ? teamA?.name?.slice(0, 8) || "A"
+                        : teamB?.name?.slice(0, 8) || "B"}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {completedSets.length > 0 && isCompleted && (
+          <p className="text-center text-[10px] font-mono text-deep-forest/60 mt-3">
+            {match.scoreA > match.scoreB
+              ? `${teamA?.name || "Home"} wins ${match.scoreA}–${match.scoreB}`
+              : `${teamB?.name || "Away"} wins ${match.scoreB}–${match.scoreA}`}
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -238,28 +1120,97 @@ function MatchCard({
   categoryName = null,
   category = null,
   isCricket = false,
+  isSetBased = false,
 }) {
   const [expanded, setExpanded] = useState(false);
   const isLive = match.status === "LIVE";
   const isCompleted = match.status === "COMPLETED";
+  const usePolishedBoard = isLive || isCompleted;
 
   const teamA = withTeamLogo(match.teamA, category);
   const teamB = withTeamLogo(match.teamB, category);
   const teamAPlayers = teamA?.players || match.teamA?.players || [];
   const teamBPlayers = teamB?.players || match.teamB?.players || [];
   const badgeSize = isLive && !compact ? "xl" : compact ? "sm" : "md";
+  const sportKey = category?.sport || "FOOTBALL";
+
+  const liveBoard = isCricket ? (
+    <CricketLiveCard match={match} />
+  ) : isSetBased ? (
+    <SetBasedLiveCard match={match} sport={sportKey} />
+  ) : (
+    <FootballLiveCard match={match} />
+  );
+
+  const squadPanel = (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {[
+        { team: teamA, players: teamAPlayers, side: "Home" },
+        { team: teamB, players: teamBPlayers, side: "Away" },
+      ].map(({ team, players, side }) => (
+        <div
+          key={side}
+          className="bg-cream-bg border border-slate-200 rounded-xl p-3 space-y-3"
+        >
+          <div className="flex items-center gap-3 border-b border-slate-200/80 pb-2.5">
+            <TeamBadge team={team} size="lg" />
+            <div className="min-w-0">
+              <p className="text-[9px] font-mono uppercase tracking-widest text-deep-forest/45 font-bold">
+                {side}
+              </p>
+              <p className="text-sm font-display uppercase tracking-wide text-deep-forest leading-tight break-words">
+                {team?.name || "TBD"}
+              </p>
+            </div>
+          </div>
+          {players.length === 0 ? (
+            <p className="text-[10px] font-mono text-deep-forest/40 py-2">
+              No players registered
+            </p>
+          ) : (
+            <ul className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+              {[...players]
+                .sort((a, b) => (a.shirtNumber || 0) - (b.shirtNumber || 0))
+                .map((player) => (
+                  <li
+                    key={player.id}
+                    className="flex items-center gap-2 text-xs bg-white border border-slate-200/70 rounded-lg px-2.5 py-1.5"
+                  >
+                    {player.logoUrl ? (
+                      <img
+                        src={player.logoUrl}
+                        alt=""
+                        className="w-7 h-7 shrink-0 rounded-full object-cover border border-mustard-gold/50"
+                      />
+                    ) : (
+                      <span className="w-6 h-6 shrink-0 flex items-center justify-center bg-[#0a331f] text-white text-[9px] font-mono font-bold rounded">
+                        {player.shirtNumber ?? "–"}
+                      </span>
+                    )}
+                    <span className="font-sans font-semibold text-deep-forest truncate flex-1 min-w-0">
+                      {player.name}
+                    </span>
+                  </li>
+                ))}
+            </ul>
+          )}
+          <p className="text-[9px] font-mono text-deep-forest/40 uppercase tracking-wider pt-1">
+            {players.length} player{players.length === 1 ? "" : "s"}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
 
   return (
-    <button
-      type="button"
-      onClick={() => setExpanded((v) => !v)}
-      className={`w-full text-left bg-white rounded-2xl border-2 p-4 sm:p-5 transition-all cursor-pointer ${
+    <div
+      className={`w-full bg-white rounded-2xl border-2 p-3 sm:p-4 transition-all ${
         isLive
           ? "border-red-400 shadow-md ring-2 ring-red-100"
-          : "border-dashed border-mustard-gold/70 hover:border-solid"
-      } ${expanded ? "ring-2 ring-mustard-gold/40" : ""}`}
+          : "border-dashed border-mustard-gold/70"
+      }`}
     >
-      <div className="flex flex-wrap justify-between items-center mb-4 gap-2">
+      <div className="flex flex-wrap justify-between items-center mb-3 gap-2">
         <span
           className={`text-[9px] font-mono font-bold px-2.5 py-1 rounded border tracking-wider shrink-0 ${
             isLive
@@ -277,166 +1228,131 @@ function MatchCard({
               {match.oversLimit} ov
             </span>
           ) : null}
+          {isSetBased && SPORT_CONFIGS[sportKey] ? (
+            <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-deep-forest/60 bg-cream-bg border border-slate-200 rounded-md px-2 py-0.5">
+              {SPORT_CONFIGS[sportKey].icon} {SPORT_CONFIGS[sportKey].name}
+            </span>
+          ) : null}
+          {!isCricket && !isSetBased ? (
+            <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-deep-forest/60 bg-cream-bg border border-slate-200 rounded-md px-2 py-0.5">
+              Football
+            </span>
+          ) : null}
           {categoryName ? (
             <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-mustard-gold-hover bg-mustard-gold/15 border border-mustard-gold/40 rounded-md px-2 py-0.5">
               {categoryName}
             </span>
           ) : null}
-          <span className="text-[9px] font-mono text-deep-forest/40 uppercase tracking-wider hidden sm:inline">
-            {expanded ? "Hide squad" : "Tap for players"}
-          </span>
         </div>
       </div>
 
-      {!expanded ? (
-        isCricket ? (
-          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-center">
-            <div className="flex flex-col items-center gap-2 min-w-0">
-              <TeamBadge team={teamA} size={badgeSize} />
-              <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wide line-clamp-2 leading-tight">
-                {teamA?.name}
-              </span>
-              <CricketScoreBlock match={match} teamId={match.teamAId} compact={compact} />
-            </div>
-            <span className="text-slate-300 font-mono text-xs font-bold">vs</span>
-            <div className="flex flex-col items-center gap-2 min-w-0">
-              <TeamBadge team={teamB} size={badgeSize} />
-              <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wide line-clamp-2 leading-tight">
-                {teamB?.name}
-              </span>
-              <CricketScoreBlock match={match} teamId={match.teamBId} compact={compact} />
-            </div>
-          </div>
-        ) : (
-        <div className="grid grid-cols-3 items-center gap-2 text-center">
-          <div className="flex flex-col items-center gap-2 min-w-0">
-            <TeamBadge team={teamA} size={badgeSize} />
-            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wide line-clamp-2 leading-tight">
-              {teamA?.name}
-            </span>
-          </div>
-
-            <div className="flex items-center justify-center gap-1.5 sm:gap-2">
-              <span
-                className={`font-mono font-bold text-white bg-[#0a331f] rounded-xl shadow border border-black ${
-                  compact ? "text-lg px-2.5 py-1.5 min-w-[34px]" : "text-2xl sm:text-3xl px-3.5 py-2 min-w-[44px]"
-                }`}
-              >
-                {match.scoreA}
-              </span>
-              <span className="text-slate-400 font-bold font-mono">:</span>
-              <span
-                className={`font-mono font-bold text-white bg-[#0a331f] rounded-xl shadow border border-black ${
-                  compact ? "text-lg px-2.5 py-1.5 min-w-[34px]" : "text-2xl sm:text-3xl px-3.5 py-2 min-w-[44px]"
-                }`}
-              >
-                {match.scoreB}
-              </span>
-            </div>
-
-          <div className="flex flex-col items-center gap-2 min-w-0">
-            <TeamBadge team={teamB} size={badgeSize} />
-            <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wide line-clamp-2 leading-tight">
-              {teamB?.name}
-            </span>
-          </div>
+      {usePolishedBoard ? (
+        <div className="space-y-3">
+          {liveBoard}
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="w-full text-[10px] font-mono font-bold uppercase tracking-wider text-deep-forest/50 hover:text-deep-forest py-2 border border-dashed border-slate-200 rounded-xl cursor-pointer"
+          >
+            {expanded ? "Hide squads" : "Show squads"}
+          </button>
+          {expanded ? squadPanel : null}
         </div>
-        )
       ) : (
-        <div className="space-y-4 animate-fadeIn">
-          {isCricket ? (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="text-center">
-                <p className="text-[9px] font-mono uppercase text-deep-forest/45 mb-1">
-                  {teamA?.name}
-                </p>
-                <CricketScoreBlock match={match} teamId={match.teamAId} />
-              </div>
-              <div className="text-center">
-                <p className="text-[9px] font-mono uppercase text-deep-forest/45 mb-1">
-                  {teamB?.name}
-                </p>
-                <CricketScoreBlock match={match} teamId={match.teamBId} />
-              </div>
-            </div>
-          ) : (
-          <div className="flex items-center justify-center gap-3">
-            <span className="font-mono font-bold text-white bg-[#0a331f] rounded-xl shadow border border-black text-3xl px-4 py-2.5 min-w-[52px] text-center">
-              {match.scoreA}
-            </span>
-            <span className="text-slate-400 font-bold font-mono text-xl">:</span>
-            <span className="font-mono font-bold text-white bg-[#0a331f] rounded-xl shadow border border-black text-3xl px-4 py-2.5 min-w-[52px] text-center">
-              {match.scoreB}
-            </span>
-          </div>
-          )}
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {[
-              { team: teamA, players: teamAPlayers, side: "Home" },
-              { team: teamB, players: teamBPlayers, side: "Away" },
-            ].map(({ team, players, side }) => (
-              <div
-                key={side}
-                className="bg-cream-bg border border-slate-200 rounded-xl p-3 space-y-3"
-              >
-                <div className="flex items-center gap-3 border-b border-slate-200/80 pb-2.5">
-                  <TeamBadge team={team} size="lg" />
-                  <div className="min-w-0">
-                    <p className="text-[9px] font-mono uppercase tracking-widest text-deep-forest/45 font-bold">
-                      {side}
-                    </p>
-                    <p className="text-sm font-display uppercase tracking-wide text-deep-forest leading-tight break-words">
-                      {team?.name || "TBD"}
-                    </p>
-                  </div>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="w-full text-left cursor-pointer"
+        >
+          {!expanded ? (
+            isCricket ? (
+              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-center">
+                <div className="flex flex-col items-center gap-2 min-w-0">
+                  <TeamBadge team={teamA} size={badgeSize} />
+                  <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wide line-clamp-2 leading-tight">
+                    {teamA?.name}
+                  </span>
+                  <CricketScoreBlock
+                    match={match}
+                    teamId={match.teamAId}
+                    compact={compact}
+                  />
                 </div>
-
-                {players.length === 0 ? (
-                  <p className="text-[10px] font-mono text-deep-forest/40 py-2">
-                    No players registered
-                  </p>
-                ) : (
-                  <ul className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
-                    {[...players]
-                      .sort((a, b) => (a.shirtNumber || 0) - (b.shirtNumber || 0))
-                      .map((player) => (
-                        <li
-                          key={player.id}
-                          className="flex items-center gap-2 text-xs bg-white border border-slate-200/70 rounded-lg px-2.5 py-1.5"
-                        >
-                          {player.logoUrl ? (
-                            <img
-                              src={player.logoUrl}
-                              alt=""
-                              className="w-7 h-7 shrink-0 rounded-full object-cover border border-mustard-gold/50"
-                            />
-                          ) : (
-                            <span className="w-6 h-6 shrink-0 flex items-center justify-center bg-[#0a331f] text-white text-[9px] font-mono font-bold rounded">
-                              {player.shirtNumber ?? "–"}
-                            </span>
-                          )}
-                          <span className="font-sans font-semibold text-deep-forest truncate flex-1 min-w-0">
-                            {player.name}
-                          </span>
-                          {player.logoUrl && (
-                            <span className="text-[9px] font-mono font-bold text-deep-forest/50 shrink-0">
-                              #{player.shirtNumber ?? "–"}
-                            </span>
-                          )}
-                        </li>
-                      ))}
-                  </ul>
-                )}
-                <p className="text-[9px] font-mono text-deep-forest/40 uppercase tracking-wider pt-1">
-                  {players.length} player{players.length === 1 ? "" : "s"}
-                </p>
+                <span className="text-slate-300 font-mono text-xs font-bold">vs</span>
+                <div className="flex flex-col items-center gap-2 min-w-0">
+                  <TeamBadge team={teamB} size={badgeSize} />
+                  <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wide line-clamp-2 leading-tight">
+                    {teamB?.name}
+                  </span>
+                  <CricketScoreBlock
+                    match={match}
+                    teamId={match.teamBId}
+                    compact={compact}
+                  />
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
+            ) : isSetBased ? (
+              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 text-center">
+                <div className="flex flex-col items-center gap-2 min-w-0">
+                  <TeamBadge team={teamA} size={badgeSize} />
+                  <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wide line-clamp-2 leading-tight">
+                    {teamA?.name}
+                  </span>
+                </div>
+                <SetScoreBlock match={match} compact={compact} />
+                <div className="flex flex-col items-center gap-2 min-w-0">
+                  <TeamBadge team={teamB} size={badgeSize} />
+                  <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wide line-clamp-2 leading-tight">
+                    {teamB?.name}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 items-center gap-2 text-center">
+                <div className="flex flex-col items-center gap-2 min-w-0">
+                  <TeamBadge team={teamA} size={badgeSize} />
+                  <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wide line-clamp-2 leading-tight">
+                    {teamA?.name}
+                  </span>
+                </div>
+                <div className="flex items-center justify-center gap-1.5 sm:gap-2">
+                  <span
+                    className={`font-mono font-bold text-white bg-[#0a331f] rounded-xl shadow border border-black ${
+                      compact
+                        ? "text-lg px-2.5 py-1.5 min-w-[34px]"
+                        : "text-2xl sm:text-3xl px-3.5 py-2 min-w-[44px]"
+                    }`}
+                  >
+                    {match.scoreA}
+                  </span>
+                  <span className="text-slate-400 font-bold font-mono">:</span>
+                  <span
+                    className={`font-mono font-bold text-white bg-[#0a331f] rounded-xl shadow border border-black ${
+                      compact
+                        ? "text-lg px-2.5 py-1.5 min-w-[34px]"
+                        : "text-2xl sm:text-3xl px-3.5 py-2 min-w-[44px]"
+                    }`}
+                  >
+                    {match.scoreB}
+                  </span>
+                </div>
+                <div className="flex flex-col items-center gap-2 min-w-0">
+                  <TeamBadge team={teamB} size={badgeSize} />
+                  <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wide line-clamp-2 leading-tight">
+                    {teamB?.name}
+                  </span>
+                </div>
+              </div>
+            )
+          ) : (
+            <div className="space-y-4 animate-fadeIn">
+              {liveBoard}
+              {squadPanel}
+            </div>
+          )}
+        </button>
       )}
-    </button>
+    </div>
   );
 }
 
@@ -467,7 +1383,7 @@ export default function PublicLiveBoard() {
     }
   };
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async ({ silent = false } = {}) => {
     try {
       const res = await fetch(`/api/tournaments/${id}`, { cache: "no-store" });
       if (!res.ok) throw new Error("Tournament not found");
@@ -547,16 +1463,33 @@ export default function PublicLiveBoard() {
       });
 
       setUpdatedAt(new Date());
-      setError(null);
+      if (!silent) setError(null);
     } catch (err) {
-      setError(err.message);
+      if (!silent) setError(err.message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [id, categoryStorageKey]);
 
   useEffect(() => {
     fetchData();
+  }, [fetchData]);
+
+  // Refresh live scores every 4s while the board tab is visible
+  useEffect(() => {
+    const tick = () => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      fetchData({ silent: true });
+    };
+    const timer = setInterval(tick, 4000);
+    const onVis = () => {
+      if (!document.hidden) fetchData({ silent: true });
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, [fetchData]);
 
   if (loading) {
@@ -625,12 +1558,22 @@ export default function PublicLiveBoard() {
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  const isCricket = tournament.sport === "CRICKET";
+  const isCricket = activeCategory?.sport === "CRICKET";
+  const isSetBased = isSetBasedSport(activeCategory?.sport);
+  const sportConfig = isSetBased ? SPORT_CONFIGS[activeCategory?.sport] : null;
+
   const footballStandings = calculateStandings(activeCategory);
   const cricketStandings = calculateCricketStandings(activeCategory).filter(
     (t) => !isPlaceholderTeam(t.name)
   );
-  const standings = isCricket ? cricketStandings : footballStandings;
+  const setBasedStandings = isSetBased
+    ? calculateSetBasedStandings(activeCategory).filter((t) => !isPlaceholderTeam(t.name))
+    : [];
+  const standings = isCricket
+    ? cricketStandings
+    : isSetBased
+      ? setBasedStandings
+      : footballStandings;
   const topScorers = calculateTopScorers(activeCategory);
   const cricketLeaders = isCricket
     ? calculateCricketLeaders(activeCategory)
@@ -651,14 +1594,18 @@ export default function PublicLiveBoard() {
     },
     { id: "schedule", label: "Schedule", icon: Calendar, count: allMatches.length },
     { id: "table", label: "Points Table", icon: Trophy, count: standings.length },
-    {
-      id: "scorers",
-      label: isCricket ? "Leaders" : "Top Scorers",
-      icon: Award,
-      count: isCricket
-        ? cricketLeaders.runScorers.length + cricketLeaders.wicketTakers.length
-        : topScorers.length,
-    },
+    ...(!isSetBased
+      ? [
+          {
+            id: "scorers",
+            label: isCricket ? "Leaders" : "Top Scorers",
+            icon: Award,
+            count: isCricket
+              ? cricketLeaders.runScorers.length + cricketLeaders.wicketTakers.length
+              : topScorers.length,
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -704,20 +1651,19 @@ export default function PublicLiveBoard() {
                   {tournament.name}
                 </h1>
                 <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] font-mono text-white/75">
-                  <span className="inline-flex items-center gap-1 bg-white/10 border border-white/15 rounded-lg px-2 py-0.5 font-bold uppercase tracking-wider">
-                    {isCricket
-                      ? `Cricket · ${tournament.oversPerInnings || "?"} ov`
-                      : "Football"}
-                  </span>
+                  {activeCategory && (
+                    <span className="inline-flex items-center gap-1 bg-mustard-gold/20 border border-mustard-gold/40 text-mustard-gold rounded-lg px-2 py-0.5 font-bold uppercase tracking-wider">
+                      {isCricket
+                        ? `🏏 ${categoryDisplayName(activeCategory)}`
+                        : isSetBased
+                          ? `${sportConfig?.icon || ""} ${categoryDisplayName(activeCategory)}`
+                          : `⚽ ${categoryDisplayName(activeCategory)}`}
+                    </span>
+                  )}
                   {tournament.startDate && (
                     <span className="inline-flex items-center gap-1 bg-white/10 border border-white/15 rounded-lg px-2 py-0.5">
                       <Calendar className="w-3 h-3 text-mustard-gold" />
                       {formatTournamentDate(tournament.startDate)}
-                    </span>
-                  )}
-                  {activeCategory && (
-                    <span className="inline-flex items-center gap-1 bg-mustard-gold/20 border border-mustard-gold/40 text-mustard-gold rounded-lg px-2 py-0.5 font-bold uppercase tracking-wider">
-                      {activeCategory.name}
                     </span>
                   )}
                   {categoryLiveMatches.length > 0 && (
@@ -767,7 +1713,7 @@ export default function PublicLiveBoard() {
                           Viewing
                         </span>
                       )}
-                      <span>{cat.name}</span>
+                      <span>{categoryDisplayName(cat)}</span>
                       <span
                         className={`text-sm sm:text-base font-mono font-bold normal-case tracking-normal ${
                           active ? "text-deep-forest/70" : "text-white/45"
@@ -1011,6 +1957,7 @@ export default function PublicLiveBoard() {
                       categoryName={m.categoryName || activeCategory?.name}
                       category={activeCategory}
                       isCricket={isCricket}
+                      isSetBased={isSetBased}
                     />
                   ))}
                 </div>
@@ -1046,6 +1993,7 @@ export default function PublicLiveBoard() {
                       categoryName={m.categoryName || activeCategory?.name}
                       category={activeCategory}
                       isCricket={isCricket}
+                      isSetBased={isSetBased}
                     />
                   ))}
                 </div>
@@ -1070,7 +2018,11 @@ export default function PublicLiveBoard() {
                 <div key={round.id} className="space-y-4">
                   <div className="flex items-center gap-3 border-b border-slate-200 pb-2">
                     <span className="text-xl font-display uppercase tracking-wider">
-                      {getRoundName(round.number, rounds.length)}
+                      {getRoundName(
+                        round.number,
+                        rounds.length,
+                        activeCategory?.scheduleFormat
+                      )}
                     </span>
                     <span className="text-[9px] font-mono font-bold uppercase bg-white border border-dashed border-mustard-gold rounded-full px-3 py-1">
                       {round.matches.length} matches
@@ -1085,6 +2037,7 @@ export default function PublicLiveBoard() {
                         categoryName={activeCategory?.name}
                         category={activeCategory}
                         isCricket={isCricket}
+                        isSetBased={isSetBased}
                       />
                     ))}
                   </div>
@@ -1102,7 +2055,9 @@ export default function PublicLiveBoard() {
             <p className="text-[10px] font-mono text-deep-forest/45 -mt-4">
               {isCricket
                 ? "Win 2 pts · Tie 1 pt · Updates when a match is completed"
-                : "Updates when a match is marked completed"}
+                : isSetBased
+                  ? "Win 3 pts · Updates when a match is completed"
+                  : "Updates when a match is marked completed"}
             </p>
 
             {standings.length === 0 ? (
@@ -1130,11 +2085,14 @@ export default function PublicLiveBoard() {
                           {isCricket ? "T" : "D"}
                         </th>
                         <th className="py-3 px-2 text-center w-12">L</th>
-                        {!isCricket && (
+                        {!isCricket && !isSetBased && (
                           <th className="py-3 px-2 text-center w-12">GD</th>
                         )}
                         {isCricket && (
                           <th className="py-3 px-2 text-center w-14">RF</th>
+                        )}
+                        {isSetBased && (
+                          <th className="py-3 px-2 text-center w-14">SF</th>
                         )}
                         <th className="py-3 px-4 text-center w-16 bg-[#062416] text-mustard-gold border-l border-[#0a331f]">
                           Pts
@@ -1156,10 +2114,10 @@ export default function PublicLiveBoard() {
                           <td className="py-3 px-2 text-center">{t.played}</td>
                           <td className="py-3 px-2 text-center">{t.won}</td>
                           <td className="py-3 px-2 text-center">
-                            {isCricket ? t.tied : t.drawn}
+                            {isCricket ? t.tied : isSetBased ? "—" : t.drawn}
                           </td>
                           <td className="py-3 px-2 text-center">{t.lost}</td>
-                          {!isCricket && (
+                          {!isCricket && !isSetBased && (
                             <td
                               className={`py-3 px-2 text-center font-bold ${
                                 t.gd > 0 ? "text-emerald-700" : t.gd < 0 ? "text-red-500" : ""
@@ -1171,8 +2129,11 @@ export default function PublicLiveBoard() {
                           {isCricket && (
                             <td className="py-3 px-2 text-center">{t.runsFor}</td>
                           )}
+                          {isSetBased && (
+                            <td className="py-3 px-2 text-center">{t.setsFor ?? 0}</td>
+                          )}
                           <td className="py-3 px-4 text-center font-bold bg-[#062416]/10 text-sm border-l border-[#093c24]/20">
-                            {isCricket ? t.points : t.pts}
+                            {isCricket ? t.points : isSetBased ? t.points : t.pts}
                           </td>
                         </tr>
                       ))}

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { loadTournamentWithCategories } from "@/lib/tournamentData";
+import { parseCategoryInputs } from "@/lib/sports";
 
 export async function GET(request, { params }) {
   try {
@@ -17,8 +18,11 @@ export async function GET(request, { params }) {
       },
     });
   } catch (error) {
-    console.error("Failed to fetch tournament:", error);
-    return NextResponse.json({ error: "Failed to fetch tournament" }, { status: 500 });
+    console.error("Failed to fetch tournament:", error?.message || error);
+    return NextResponse.json(
+      { error: "Failed to fetch tournament", detail: error?.message },
+      { status: 500 }
+    );
   }
 }
 
@@ -71,31 +75,59 @@ export async function PATCH(request, { params }) {
     });
 
     if (Array.isArray(categories)) {
-      const desired = [
-        ...new Set(categories.map((c) => String(c).trim()).filter(Boolean)),
-      ];
+      let parsed;
+      try {
+        parsed = parseCategoryInputs(categories);
+      } catch (err) {
+        return NextResponse.json({ error: err.message }, { status: 400 });
+      }
 
-      if (desired.length === 0) {
+      if (parsed.length === 0) {
         return NextResponse.json(
           { error: "Keep at least one category" },
           { status: 400 }
         );
       }
 
-      const existingByName = new Map(
-        existing.categories.map((c) => [c.name, c])
+      const desiredKeys = new Set(
+        parsed.map((c) => `${c.sport}::${c.name.toLowerCase()}`)
+      );
+      const existingByKey = new Map(
+        existing.categories.map((c) => [
+          `${(c.sport || "FOOTBALL").toUpperCase()}::${c.name.toLowerCase()}`,
+          c,
+        ])
       );
 
       for (const cat of existing.categories) {
-        if (!desired.includes(cat.name)) {
+        const key = `${(cat.sport || "FOOTBALL").toUpperCase()}::${cat.name.toLowerCase()}`;
+        if (!desiredKeys.has(key)) {
           await prisma.tournamentCategory.delete({ where: { id: cat.id } });
         }
       }
 
-      for (const categoryName of desired) {
-        if (!existingByName.has(categoryName)) {
+      for (const cat of parsed) {
+        const key = `${cat.sport}::${cat.name.toLowerCase()}`;
+        const prev = existingByKey.get(key);
+        if (!prev) {
           await prisma.tournamentCategory.create({
-            data: { name: categoryName, tournamentId: id },
+            data: {
+              name: cat.name,
+              sport: cat.sport,
+              oversPerInnings: cat.oversPerInnings,
+              tournamentId: id,
+            },
+          });
+        } else if (
+          prev.oversPerInnings !== cat.oversPerInnings ||
+          (prev.sport || "FOOTBALL").toUpperCase() !== cat.sport
+        ) {
+          await prisma.tournamentCategory.update({
+            where: { id: prev.id },
+            data: {
+              sport: cat.sport,
+              oversPerInnings: cat.oversPerInnings,
+            },
           });
         }
       }
@@ -105,7 +137,7 @@ export async function PATCH(request, { params }) {
       where: { id },
       include: {
         categories: {
-          orderBy: { name: "asc" },
+          orderBy: [{ sport: "asc" }, { name: "asc" }],
           include: {
             _count: { select: { teams: true } },
           },
@@ -116,6 +148,9 @@ export async function PATCH(request, { params }) {
     return NextResponse.json(tournament);
   } catch (error) {
     console.error("Failed to update tournament:", error);
-    return NextResponse.json({ error: "Failed to update tournament" }, { status: 500 });
+    return NextResponse.json(
+      { error: error.message || "Failed to update tournament" },
+      { status: 500 }
+    );
   }
 }

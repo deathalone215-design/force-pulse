@@ -1,6 +1,11 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { isPlaceholderTeam } from "@/lib/tournamentResolver";
+import {
+  normalizeSport,
+  parseCategoryInputs,
+  sportLabel,
+} from "@/lib/sports";
 
 export async function GET() {
   try {
@@ -8,7 +13,7 @@ export async function GET() {
       orderBy: { createdAt: "desc" },
       include: {
         categories: {
-          orderBy: { name: "asc" },
+          orderBy: [{ sport: "asc" }, { name: "asc" }],
           include: {
             teams: {
               select: { name: true },
@@ -25,10 +30,11 @@ export async function GET() {
       },
     });
 
-    // Real clubs only + how many matches admin has set to LIVE
     const payload = tournaments.map((t) => {
       let liveMatchCount = 0;
+      const sports = new Set();
       const categories = t.categories.map((c) => {
+        sports.add(normalizeSport(c.sport));
         for (const round of c.rounds || []) {
           for (const match of round.matches || []) {
             if (match.status === "LIVE") liveMatchCount += 1;
@@ -39,6 +45,8 @@ export async function GET() {
         const { teams, rounds, ...rest } = c;
         return {
           ...rest,
+          sport: normalizeSport(c.sport),
+          oversPerInnings: c.oversPerInnings ?? null,
           _count: { teams: clubCount },
         };
       });
@@ -47,8 +55,8 @@ export async function GET() {
         id: t.id,
         name: t.name,
         logoUrl: t.logoUrl,
-        sport: t.sport || "FOOTBALL",
-        oversPerInnings: t.oversPerInnings ?? null,
+        sports: [...sports],
+        sportLabels: [...sports].map(sportLabel),
         startDate: t.startDate,
         createdAt: t.createdAt,
         liveMatchCount,
@@ -66,52 +74,42 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { name, startDate, logoUrl, categories, sport, oversPerInnings } = body;
+    const { name, startDate, logoUrl, categories, sport } = body;
 
     if (!name) {
       return NextResponse.json({ error: "Tournament name is required" }, { status: 400 });
     }
 
-    const categoryNames = Array.isArray(categories)
-      ? [...new Set(categories.map((c) => String(c).trim()).filter(Boolean))]
-      : [];
+    let parsed;
+    try {
+      parsed = parseCategoryInputs(categories, sport || "FOOTBALL");
+    } catch (err) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
 
-    if (categoryNames.length === 0) {
+    if (parsed.length === 0) {
       return NextResponse.json(
         { error: "Select at least one category" },
         { status: 400 }
       );
     }
 
-    const sportValue = String(sport || "FOOTBALL").toUpperCase() === "CRICKET"
-      ? "CRICKET"
-      : "FOOTBALL";
-
-    let overs = null;
-    if (sportValue === "CRICKET") {
-      overs = parseInt(oversPerInnings, 10);
-      if (!overs || overs < 1 || overs > 50) {
-        return NextResponse.json(
-          { error: "Cricket tournaments need overs per innings between 1 and 50" },
-          { status: 400 }
-        );
-      }
-    }
-
     const tournament = await prisma.tournament.create({
       data: {
         name,
         logoUrl: logoUrl || null,
-        sport: sportValue,
-        oversPerInnings: overs,
         startDate: startDate ? new Date(startDate) : new Date(),
         categories: {
-          create: categoryNames.map((categoryName) => ({ name: categoryName })),
+          create: parsed.map((c) => ({
+            name: c.name,
+            sport: c.sport,
+            oversPerInnings: c.oversPerInnings,
+          })),
         },
       },
       include: {
         categories: {
-          orderBy: { name: "asc" },
+          orderBy: [{ sport: "asc" }, { name: "asc" }],
           include: {
             _count: {
               select: { teams: true },
@@ -124,6 +122,9 @@ export async function POST(request) {
     return NextResponse.json(tournament, { status: 201 });
   } catch (error) {
     console.error("Failed to create tournament:", error);
-    return NextResponse.json({ error: "Failed to create tournament" }, { status: 500 });
+    return NextResponse.json(
+      { error: error.message || "Failed to create tournament" },
+      { status: 500 }
+    );
   }
 }

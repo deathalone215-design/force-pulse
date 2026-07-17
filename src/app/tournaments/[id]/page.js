@@ -16,33 +16,21 @@ import {
   calculateCricketStandings,
 } from "@/lib/cricket";
 import { uploadImageToSupabase } from "@/lib/imageUpload";
+import { categoryDisplayName, isCricketSport } from "@/lib/sports";
+import { isPlaceholderTeam } from "@/lib/tournamentResolver";
+import {
+  SCHEDULE_FORMATS,
+  generateScheduleRounds,
+  generateSwissRound,
+  getRoundDisplayName,
+  normalizeScheduleFormat,
+  scheduleFormatHelp,
+  scheduleFormatLabel,
+  suggestedSwissRounds,
+} from "@/lib/scheduleFormats";
 
-const isPlaceholderTeam = (name) => {
-  if (!name) return false;
-  const norm = name.toLowerCase().trim();
-  return norm.includes("tbd") || [
-    "1st placed team",
-    "2nd placed team",
-    "3rd placed team",
-    "4th placed team",
-    "winner sf1",
-    "winner sf2",
-    "winner first",
-    "winner second",
-    "w1",
-    "w2"
-  ].some(p => norm.includes(p));
-};
-
-const getRoundName = (number, totalRounds) => {
-  if (totalRounds === 4) {
-    if (number === 1) return "Saturday League";
-    if (number === 2) return "Sunday League";
-    if (number === 3) return "Semi-Finals";
-    if (number === 4) return "Final";
-  }
-  return `Round ${number}`;
-};
+const getRoundName = (number, totalRounds, format) =>
+  getRoundDisplayName(number, totalRounds, format);
 
 export default function TournamentDashboard() {
   const { id } = useParams();
@@ -159,12 +147,21 @@ export default function TournamentDashboard() {
 
   // Manual Scheduler State
   const [schedulerMode, setSchedulerMode] = useState("auto"); // auto, manual
+  const [scheduleFormat, setScheduleFormat] = useState("ROUND_ROBIN");
   const [manualRounds, setManualRounds] = useState([{ number: 1, matches: [{ teamAId: "", teamBId: "" }] }]);
   const [savingSchedule, setSavingSchedule] = useState(false);
 
   useEffect(() => {
     fetchTournamentDetails();
   }, [id]);
+
+  // Keep format picker in sync with active category
+  useEffect(() => {
+    const cat = getActiveCategory();
+    if (cat?.scheduleFormat) {
+      setScheduleFormat(normalizeScheduleFormat(cat.scheduleFormat));
+    }
+  }, [tournament, activeCategoryId]);
 
   const fetchTournamentDetails = async ({ silent = false } = {}) => {
     try {
@@ -556,59 +553,109 @@ export default function TournamentDashboard() {
     }
   };
 
-  // Round Robin Schedule Generator
+  // Multi-format schedule generator (RR / League / Knockout / Swiss R1)
   const generateAutoSchedule = async () => {
     const cat = getActiveCategory();
     if (!cat) {
       alert("Select a category first.");
       return;
     }
-    const realTeams = cat.teams ? cat.teams.filter(t => !isPlaceholderTeam(t.name)) : [];
+    const realTeams = cat.teams
+      ? cat.teams.filter((t) => !isPlaceholderTeam(t.name))
+      : [];
     if (realTeams.length < 2) {
       alert("You need at least 2 teams to generate a schedule.");
       return;
     }
 
     if (cat.rounds.length > 0) {
-      if (!window.confirm("Generating a new schedule will delete all existing matches and live scores for this category. Proceed?")) return;
+      if (
+        !window.confirm(
+          "Generating a new schedule will delete all existing matches and live scores for this category. Proceed?"
+        )
+      ) {
+        return;
+      }
     }
 
     try {
       setSavingSchedule(true);
-
-      const list = [...realTeams];
-      if (list.length % 2 !== 0) {
-        list.push({ id: null, name: "BYE" });
-      }
-      const n = list.length;
-      const rounds = [];
-      
-      for (let rIndex = 0; rIndex < n - 1; rIndex++) {
-        const roundMatches = [];
-        for (let i = 0; i < n / 2; i++) {
-          const home = list[i];
-          const away = list[n - 1 - i];
-          if (home.id && away.id) {
-            roundMatches.push({ teamAId: home.id, teamBId: away.id });
-          }
-        }
-        rounds.push({
-          number: rIndex + 1,
-          matches: roundMatches
-        });
-        // Rotate (keep first fixed)
-        list.splice(1, 0, list.pop());
-      }
+      const format = normalizeScheduleFormat(scheduleFormat);
+      const rounds = generateScheduleRounds(format, realTeams);
 
       const res = await fetch(`/api/tournaments/${id}/schedule`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rounds, categoryId: cat.id }),
+        body: JSON.stringify({
+          rounds,
+          categoryId: cat.id,
+          format,
+          mode: "replace",
+        }),
       });
 
-      if (!res.ok) throw new Error("Failed to save auto-schedule");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to save schedule");
       await fetchTournamentDetails({ silent: true });
       setActiveTab("dashboard");
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSavingSchedule(false);
+    }
+  };
+
+  const generateNextSwissRound = async () => {
+    const cat = getActiveCategory();
+    if (!cat) return;
+    const realTeams = (cat.teams || []).filter((t) => !isPlaceholderTeam(t.name));
+    const rounds = [...(cat.rounds || [])].sort((a, b) => a.number - b.number);
+    if (rounds.length === 0) {
+      alert("Generate Swiss Round 1 first.");
+      return;
+    }
+    const latest = rounds[rounds.length - 1];
+    const latestDone =
+      latest.matches.length > 0 &&
+      latest.matches.every((m) => m.status === "COMPLETED");
+    if (!latestDone) {
+      alert("Complete all matches in the current Swiss round before generating the next.");
+      return;
+    }
+
+    const allMatches = rounds.flatMap((r) => r.matches || []);
+    const completed = allMatches.filter((m) => m.status === "COMPLETED");
+    const nextNumber = latest.number + 1;
+    const suggested = suggestedSwissRounds(realTeams.length);
+    if (nextNumber > suggested) {
+      if (
+        !window.confirm(
+          `Suggested Swiss depth is ${suggested} rounds for ${realTeams.length} clubs. Generate round ${nextNumber} anyway?`
+        )
+      ) {
+        return;
+      }
+    }
+
+    try {
+      setSavingSchedule(true);
+      const round = generateSwissRound(realTeams, completed, nextNumber, allMatches);
+      if (!round.matches.length) {
+        throw new Error("Could not pair any matches for the next Swiss round.");
+      }
+      const res = await fetch(`/api/tournaments/${id}/schedule`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rounds: [round],
+          categoryId: cat.id,
+          format: "SWISS",
+          mode: "append",
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to append Swiss round");
+      await fetchTournamentDetails({ silent: true });
     } catch (err) {
       alert(err.message);
     } finally {
@@ -838,7 +885,7 @@ export default function TournamentDashboard() {
   };
 
   const handleExportStandings = () => {
-    if (tournament.sport === "CRICKET") {
+    if (isCricketSport(getActiveCategory()?.sport)) {
       const cat = getActiveCategory();
       const rowsData = calculateCricketStandings(cat).filter(
         (t) => !isPlaceholderTeam(t.name)
@@ -875,7 +922,7 @@ export default function TournamentDashboard() {
   };
 
   const handleExportScorers = () => {
-    if (tournament.sport === "CRICKET") {
+    if (isCricketSport(getActiveCategory()?.sport)) {
       const cat = getActiveCategory();
       const { runScorers, wicketTakers } = calculateCricketLeaders(cat);
       const headers = ["Rank", "Player", "Team", "Runs", "Wickets"];
@@ -940,7 +987,7 @@ export default function TournamentDashboard() {
   const activeCategory = getActiveCategory();
   const categoryTeams = activeCategory?.teams || [];
   const categoryRounds = activeCategory?.rounds || [];
-  const isCricket = tournament.sport === "CRICKET";
+  const isCricket = isCricketSport(activeCategory?.sport);
   const footballStandings = calculateStandings();
   const cricketStandings = calculateCricketStandings(activeCategory).filter(
     (t) => !isPlaceholderTeam(t.name)
@@ -980,16 +1027,10 @@ export default function TournamentDashboard() {
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-1.5 text-mustard-gold font-mono text-[9px] sm:text-[10px] font-bold uppercase tracking-wide sm:tracking-widest">
                   <span>FORCE PULSE</span>
-                  <span>•</span>
-                  <span>
-                    {isCricket
-                      ? `Cricket · ${tournament.oversPerInnings || "?"} ov`
-                      : "Football"}
-                  </span>
                   {activeCategory ? (
                     <>
                       <span>•</span>
-                      <span>{activeCategory.name}</span>
+                      <span>{categoryDisplayName(activeCategory)}</span>
                     </>
                   ) : null}
                 </div>
@@ -1036,7 +1077,7 @@ export default function TournamentDashboard() {
                         : "bg-[#093c24]/70 text-white/85 border-white/15 hover:bg-[#093c24] hover:text-white hover:border-white/30"
                     }`}
                   >
-                    {cat.name}
+                    {categoryDisplayName(cat)}
                     <span className="ml-1.5 opacity-60">
                       ({(cat.teams || []).filter((t) => !isPlaceholderTeam(t.name)).length})
                     </span>
@@ -1133,7 +1174,7 @@ export default function TournamentDashboard() {
                 {categoryRounds.map((round) => (
                   <div key={round.id} className="space-y-6">
                     <div className="flex items-center gap-3 border-b border-slate-200 pb-3">
-                      <span className="text-xl font-display text-deep-forest uppercase tracking-wider">{getRoundName(round.number, categoryRounds.length)}</span>
+                      <span className="text-xl font-display text-deep-forest uppercase tracking-wider">{getRoundName(round.number, categoryRounds.length, activeCategory?.scheduleFormat)}</span>
                       <span className="text-[9px] font-mono text-deep-forest bg-white border border-dashed border-mustard-gold rounded-full px-3 py-1 uppercase font-bold shadow-sm">
                         {round.matches.length} Matches
                       </span>
@@ -1348,7 +1389,7 @@ export default function TournamentDashboard() {
                 </div>
                 <p className="text-[10px] font-mono text-deep-forest/50 mb-6 leading-relaxed">
                   Add club name, optional logo, then players with jersey numbers and photos.
-                  Category: <span className="font-bold text-deep-forest">{activeCategory?.name || "—"}</span>
+                  Category: <span className="font-bold text-deep-forest">{activeCategory ? categoryDisplayName(activeCategory) : "—"}</span>
                 </p>
 
                 <form onSubmit={handleAddTeam} className="space-y-6">
@@ -1889,7 +1930,7 @@ export default function TournamentDashboard() {
                 }`}
               >
                 <span className="sm:hidden">Auto Generator</span>
-                <span className="hidden sm:inline">League Formatted Generator</span>
+                <span className="hidden sm:inline">Format Generator</span>
               </button>
               <button
                 onClick={() => setSchedulerMode("manual")}
@@ -1904,24 +1945,62 @@ export default function TournamentDashboard() {
               </button>
             </div>
 
-            {/* AUTO ROUND ROBIN BUILDER */}
+            {/* AUTO MULTI-FORMAT BUILDER */}
             {schedulerMode === "auto" && (
               <div className="max-w-2xl bg-white border-2 border-dashed border-mustard-gold rounded-2xl p-6 space-y-6 shadow-sm relative overflow-hidden">
                 <div className="space-y-2">
                   <div className="flex items-center gap-1.5 text-mustard-gold">
                     <Sparkles className="w-4 h-4 text-mustard-gold" />
-                    <h3 className="text-xs font-bold uppercase tracking-wider font-mono">League Formatted Fixtures</h3>
+                    <h3 className="text-xs font-bold uppercase tracking-wider font-mono">
+                      Schedule Format Generator
+                    </h3>
                   </div>
                   <p className="text-xs text-deep-forest/70 leading-relaxed">
-                    This algorithm generates a complete league formatted schedule matching every team against each other exactly once. It handles odd numbers of teams automatically using placeholder bye states.
+                    {scheduleFormatHelp(scheduleFormat)}
                   </p>
                 </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {SCHEDULE_FORMATS.map((fmt) => (
+                    <button
+                      key={fmt}
+                      type="button"
+                      onClick={() => setScheduleFormat(fmt)}
+                      className={`px-3 py-2.5 rounded-xl border-2 font-mono text-[10px] uppercase tracking-wider min-h-[44px] cursor-pointer transition-all ${
+                        scheduleFormat === fmt
+                          ? "bg-mustard-gold text-deep-forest border-mustard-gold font-bold"
+                          : "bg-cream-bg text-deep-forest/70 border-slate-200 hover:border-mustard-gold/50"
+                      }`}
+                    >
+                      {scheduleFormatLabel(fmt)}
+                    </button>
+                  ))}
+                </div>
+
+                {activeCategory?.scheduleFormat && (
+                  <p className="text-[10px] font-mono text-deep-forest/50">
+                    Current category format:{" "}
+                    <span className="font-bold text-deep-forest">
+                      {scheduleFormatLabel(activeCategory.scheduleFormat)}
+                    </span>
+                  </p>
+                )}
 
                 <div className="border border-slate-200 rounded-xl p-4 bg-cream-bg space-y-3 shadow-inner">
                   <div className="flex justify-between items-center text-xs font-mono border-b border-slate-200 pb-2">
                     <span className="text-deep-forest/50">Total Registered Teams</span>
                     <span className="text-deep-forest font-bold">{categoryTeams.filter(t => !isPlaceholderTeam(t.name)).length} Clubs</span>
                   </div>
+                  {scheduleFormat === "SWISS" && (
+                    <div className="flex justify-between items-center text-xs font-mono border-b border-slate-200 pb-2">
+                      <span className="text-deep-forest/50">Suggested Swiss rounds</span>
+                      <span className="text-deep-forest font-bold">
+                        {suggestedSwissRounds(
+                          categoryTeams.filter((t) => !isPlaceholderTeam(t.name)).length
+                        )}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex flex-wrap gap-2 pt-2">
                     {categoryTeams.filter(t => !isPlaceholderTeam(t.name)).map(team => (
                       <span key={team.id} className="text-xs font-mono bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-deep-forest flex items-center gap-2 shadow-sm">
@@ -1940,23 +2019,51 @@ export default function TournamentDashboard() {
                     <Info className="w-4 h-4 text-yellow-600" /> You require at least 2 clubs registered to compile fixtures.
                   </div>
                 ) : (
-                  <button
-                    onClick={generateAutoSchedule}
-                    disabled={savingSchedule}
-                    className="w-full bg-mustard-gold hover:bg-mustard-gold-hover text-deep-forest font-bold uppercase tracking-wider py-3.5 rounded-xl text-xs transition-all shadow flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
-                  >
-                    {savingSchedule ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin text-deep-forest" />
-                        Generating Fixtures...
-                      </>
-                    ) : (
-                      <>
-                        <Play className="w-3.5 h-3.5 fill-deep-forest text-deep-forest" />
-                        Generate & Publish Schedule
-                      </>
-                    )}
-                  </button>
+                  <div className="space-y-3">
+                    <button
+                      onClick={generateAutoSchedule}
+                      disabled={savingSchedule}
+                      className="w-full bg-mustard-gold hover:bg-mustard-gold-hover text-deep-forest font-bold uppercase tracking-wider py-3.5 rounded-xl text-xs transition-all shadow flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      {savingSchedule ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin text-deep-forest" />
+                          Generating Fixtures...
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3.5 h-3.5 fill-deep-forest text-deep-forest" />
+                          {scheduleFormat === "SWISS"
+                            ? "Generate & Publish Swiss Round 1"
+                            : `Generate & Publish ${scheduleFormatLabel(scheduleFormat)}`}
+                        </>
+                      )}
+                    </button>
+
+                    {normalizeScheduleFormat(activeCategory?.scheduleFormat) === "SWISS" &&
+                      categoryRounds.length > 0 &&
+                      (() => {
+                        const sorted = [...categoryRounds].sort(
+                          (a, b) => a.number - b.number
+                        );
+                        const last = sorted[sorted.length - 1];
+                        const ready =
+                          last?.matches?.length > 0 &&
+                          last.matches.every((m) => m.status === "COMPLETED");
+                        return (
+                          <button
+                            type="button"
+                            onClick={generateNextSwissRound}
+                            disabled={savingSchedule || !ready}
+                            className="w-full bg-[#0d472c] hover:bg-[#093c24] text-white font-bold uppercase tracking-wider py-3.5 rounded-xl text-xs transition-all shadow flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40"
+                          >
+                            {ready
+                              ? `Generate Swiss Round ${(last?.number || 0) + 1}`
+                              : "Complete current Swiss round to unlock next"}
+                          </button>
+                        );
+                      })()}
+                  </div>
                 )}
               </div>
             )}

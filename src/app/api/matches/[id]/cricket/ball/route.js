@@ -48,7 +48,7 @@ export async function POST(request, { params }) {
     if (!match) {
       return NextResponse.json({ error: "Match not found" }, { status: 404 });
     }
-    if (match.round?.category?.tournament?.sport !== "CRICKET") {
+    if (match.round?.category?.sport !== "CRICKET") {
       return NextResponse.json({ error: "Not a cricket match" }, { status: 400 });
     }
     if (match.status !== "LIVE") {
@@ -230,8 +230,6 @@ export async function POST(request, { params }) {
         where: { id: matchId },
         include: {
           cricketBalls: { orderBy: { createdAt: "asc" } },
-          teamA: { include: { players: true } },
-          teamB: { include: { players: true } },
         },
       });
 
@@ -366,8 +364,6 @@ export async function DELETE(request, { params }) {
       },
       include: {
         cricketBalls: { orderBy: { createdAt: "asc" } },
-        teamA: { include: { players: true } },
-        teamB: { include: { players: true } },
       },
     });
 

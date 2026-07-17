@@ -1,6 +1,33 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { findResolvedMatch } from "@/lib/tournamentData";
+import { matchDetailInclude } from "@/lib/matchState";
+
+export async function GET(_request, { params }) {
+  try {
+    const { id } = await params;
+    const match = await prisma.match.findUnique({
+      where: { id },
+      include: matchDetailInclude,
+    });
+
+    if (!match) {
+      return NextResponse.json({ error: "Match not found" }, { status: 404 });
+    }
+
+    return NextResponse.json(match, {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate",
+      },
+    });
+  } catch (error) {
+    console.error("Failed to load match:", error);
+    return NextResponse.json(
+      { error: error.message || "Failed to load match" },
+      { status: 500 }
+    );
+  }
+}
 
 export async function PATCH(request, { params }) {
   try {
