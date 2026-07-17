@@ -2,10 +2,8 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { parseCategoryInputs } from "@/lib/sports";
 import { loadTournamentWithCategories } from "@/lib/tournamentData";
-import {
-  loadLiveBoardDelta,
-  loadTournamentForLiveBoard,
-} from "@/lib/tournamentLiveBoard";
+import { loadTournamentForLiveBoard } from "@/lib/tournamentLiveBoard";
+import { loadLiveBoardDelta } from "@/lib/tournamentLiveDelta";
 
 export async function GET(request, { params }) {
   try {
