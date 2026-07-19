@@ -303,8 +303,12 @@ export function suggestedSwissRounds(teamCount) {
 
 /**
  * Round display names for dashboard / live board.
+ * Pass `customName` when the round has a saved label.
  */
-export function getRoundDisplayName(number, totalRounds, format) {
+export function getRoundDisplayName(number, totalRounds, format, customName) {
+  const custom = customName != null ? String(customName).trim() : "";
+  if (custom) return custom;
+
   const fmt = normalizeScheduleFormat(format);
   const n = number || 1;
   const total = totalRounds || 1;

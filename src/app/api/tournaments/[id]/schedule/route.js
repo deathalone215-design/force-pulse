@@ -123,6 +123,7 @@ export async function POST(request, { params }) {
       const round = await prisma.round.create({
         data: {
           number: nextNumber,
+          name: r.name != null && String(r.name).trim() ? String(r.name).trim() : null,
           categoryId,
           matches: { create: matchCreates },
         },
@@ -163,6 +164,7 @@ export async function POST(request, { params }) {
       const round = await prisma.round.create({
         data: {
           number: parseInt(r.number, 10) || 1,
+          name: r.name != null && String(r.name).trim() ? String(r.name).trim() : null,
           categoryId,
           matches: { create: matchCreates },
         },

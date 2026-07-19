@@ -58,6 +58,7 @@ model Player {
 model Round {
   id         String             @id @default(uuid())
   number     Int                // Round index (1, 2, etc.)
+  name       String?            // Optional custom label (e.g. Semi-Finals)
   categoryId String
   category   TournamentCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   matches    Match[]

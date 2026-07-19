@@ -41,8 +41,8 @@ import {
   isCasConflict,
 } from "@/lib/matchCasClient";
 
-const getRoundName = (number, totalRounds, format) =>
-  getRoundDisplayName(number, totalRounds, format);
+const getRoundName = (number, totalRounds, format, customName) =>
+  getRoundDisplayName(number, totalRounds, format, customName);
 
 const getTeamGradient = (name) => {
   if (!name) return "linear-gradient(135deg, #334155, #0f172a)";
@@ -993,7 +993,8 @@ export default function MatchScorerPage() {
                   ? ` · ${getRoundName(
                       ctx.round.number,
                       ctx.totalRounds,
-                      category?.scheduleFormat
+                      category?.scheduleFormat,
+                      ctx.round.name
                     )}`
                   : ""}
               </p>

@@ -60,8 +60,8 @@ import {
   completedFootballClockLabel,
 } from "@/lib/footballClock";
 
-const getRoundName = (number, totalRounds, format) =>
-  getRoundDisplayName(number, totalRounds, format);
+const getRoundName = (number, totalRounds, format, customName) =>
+  getRoundDisplayName(number, totalRounds, format, customName);
 
 function withTeamLogo(team, category) {
   if (!team) return team;
@@ -2107,7 +2107,8 @@ export default function PublicLiveBoard() {
                       {getRoundName(
                         round.number,
                         rounds.length,
-                        activeCategory?.scheduleFormat
+                        activeCategory?.scheduleFormat,
+                        round.name
                       )}
                     </span>
                     <span className="text-[9px] font-mono font-bold uppercase bg-white border border-dashed border-mustard-gold rounded-full px-3 py-1">

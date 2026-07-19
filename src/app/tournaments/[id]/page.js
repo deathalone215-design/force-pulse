@@ -35,8 +35,8 @@ import {
   completedFootballClockLabel,
 } from "@/lib/footballClock";
 
-const getRoundName = (number, totalRounds, format) =>
-  getRoundDisplayName(number, totalRounds, format);
+const getRoundName = (number, totalRounds, format, customName) =>
+  getRoundDisplayName(number, totalRounds, format, customName);
 
 function matchCardClockLabel(match, now = Date.now(), category = null, tournamentId = null) {
   if (!match) return null;
@@ -174,7 +174,7 @@ export default function TournamentDashboard() {
   // Manual Scheduler State
   const [schedulerMode, setSchedulerMode] = useState("auto"); // auto, manual
   const [scheduleFormat, setScheduleFormat] = useState("ROUND_ROBIN");
-  const [manualRounds, setManualRounds] = useState([{ number: 1, matches: [{ teamAId: "", teamBId: "" }] }]);
+  const [manualRounds, setManualRounds] = useState([{ number: 1, name: "Round 1", matches: [{ teamAId: "", teamBId: "" }] }]);
   const [savingSchedule, setSavingSchedule] = useState(false);
 
   useEffect(() => {
@@ -726,6 +726,7 @@ export default function TournamentDashboard() {
     }
     const mapped = cat.rounds.map(r => ({
       number: r.number,
+      name: r.name || `Round ${r.number}`,
       matches: r.matches.map(m => ({
         teamAId: m.teamAId,
         teamBId: m.teamBId
@@ -736,12 +737,23 @@ export default function TournamentDashboard() {
 
   // Add Round to Manual Form
   const addManualRound = () => {
-    setManualRounds([...manualRounds, { number: manualRounds.length + 1, matches: [{ teamAId: "", teamBId: "" }] }]);
+    const n = manualRounds.length + 1;
+    setManualRounds([...manualRounds, { number: n, name: `Round ${n}`, matches: [{ teamAId: "", teamBId: "" }] }]);
   };
 
   // Remove Round from Manual Form
   const removeManualRound = (index) => {
-    setManualRounds(manualRounds.filter((_, i) => i !== index).map((r, idx) => ({ ...r, number: idx + 1 })));
+    setManualRounds(manualRounds.filter((_, i) => i !== index).map((r, idx) => ({
+      ...r,
+      number: idx + 1,
+      name: r.name?.trim() ? r.name : `Round ${idx + 1}`,
+    })));
+  };
+
+  const updateManualRoundName = (rIndex, name) => {
+    const updated = [...manualRounds];
+    updated[rIndex] = { ...updated[rIndex], name };
+    setManualRounds(updated);
   };
 
   // Update Manual Match Selection
@@ -1153,7 +1165,7 @@ export default function TournamentDashboard() {
                 {categoryRounds.map((round) => (
                   <div key={round.id} className="space-y-6">
                     <div className="flex items-center gap-3 border-b border-slate-200 pb-3">
-                      <span className="text-xl font-display text-deep-forest uppercase tracking-wider">{getRoundName(round.number, categoryRounds.length, activeCategory?.scheduleFormat)}</span>
+                      <span className="text-xl font-display text-deep-forest uppercase tracking-wider">{getRoundName(round.number, categoryRounds.length, activeCategory?.scheduleFormat, round.name)}</span>
                       <span className="text-[9px] font-mono text-deep-forest bg-white border border-dashed border-mustard-gold rounded-full px-3 py-1 uppercase font-bold shadow-sm">
                         {round.matches.length} Matches
                       </span>
@@ -2110,13 +2122,19 @@ export default function TournamentDashboard() {
                 <div className="space-y-6">
                   {manualRounds.map((round, rIndex) => (
                     <div key={rIndex} className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl p-5 shadow-sm relative">
-                      <div className="flex justify-between items-center border-b border-slate-100 pb-3 mb-4">
-                        <h4 className="font-bold text-deep-forest font-mono text-xs uppercase tracking-wider">Round {round.number}</h4>
+                      <div className="flex justify-between items-center border-b border-slate-100 pb-3 mb-4 gap-3">
+                        <input
+                          type="text"
+                          value={round.name ?? `Round ${round.number}`}
+                          onChange={(e) => updateManualRoundName(rIndex, e.target.value)}
+                          placeholder={`Round ${round.number}`}
+                          className="font-bold text-deep-forest font-mono text-xs uppercase tracking-wider bg-transparent border border-transparent hover:border-slate-200 focus:border-mustard-gold focus:bg-cream-bg/40 rounded-lg px-2 py-1.5 outline-none min-w-0 flex-1 max-w-xs"
+                        />
                         {manualRounds.length > 1 && (
                           <button
                             type="button"
                             onClick={() => removeManualRound(rIndex)}
-                            className="text-red-500 hover:text-red-650 text-[10px] font-mono font-bold flex items-center gap-1 cursor-pointer"
+                            className="text-red-500 hover:text-red-650 text-[10px] font-mono font-bold flex items-center gap-1 cursor-pointer shrink-0"
                           >
                             <Trash2 className="w-3.5 h-3.5" /> Remove Round
                           </button>
