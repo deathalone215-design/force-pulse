@@ -796,7 +796,7 @@ export default function TournamentDashboard() {
 
       if (!res.ok) throw new Error("Failed to save schedule");
       await fetchTournamentDetails({ silent: true });
-      setManualRounds([{ number: 1, matches: [{ teamAId: "", teamBId: "" }] }]);
+      setManualRounds([{ number: 1, name: "Round 1", matches: [{ teamAId: "", teamBId: "" }] }]);
       setActiveTab("dashboard");
     } catch (err) {
       alert(err.message);
@@ -1060,7 +1060,7 @@ export default function TournamentDashboard() {
                     onClick={() => {
                       selectCategory(cat.id);
                       cancelTeamPicker();
-                      setManualRounds([{ number: 1, matches: [{ teamAId: "", teamBId: "" }] }]);
+                      setManualRounds([{ number: 1, name: "Round 1", matches: [{ teamAId: "", teamBId: "" }] }]);
                     }}
                     className={`px-3.5 py-2.5 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider border transition-all cursor-pointer min-h-[44px] ${
                       isActive
