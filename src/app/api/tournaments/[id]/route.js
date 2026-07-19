@@ -143,11 +143,15 @@ export async function PATCH(request, { params }) {
               name: cat.name,
               sport: cat.sport,
               oversPerInnings: cat.oversPerInnings,
+              fullTimeMinutes: cat.fullTimeMinutes,
+              extraTimeMinutes: cat.extraTimeMinutes,
               tournamentId: id,
             },
           });
         } else if (
           prev.oversPerInnings !== cat.oversPerInnings ||
+          prev.fullTimeMinutes !== cat.fullTimeMinutes ||
+          prev.extraTimeMinutes !== cat.extraTimeMinutes ||
           (prev.sport || "FOOTBALL").toUpperCase() !== cat.sport
         ) {
           await prisma.tournamentCategory.update({
@@ -155,6 +159,8 @@ export async function PATCH(request, { params }) {
             data: {
               sport: cat.sport,
               oversPerInnings: cat.oversPerInnings,
+              fullTimeMinutes: cat.fullTimeMinutes,
+              extraTimeMinutes: cat.extraTimeMinutes,
             },
           });
         }

@@ -64,8 +64,124 @@ body {
   background-size: 80px 100%;
 }
 
-/* Horizontal scroll hint for sticky tab bars */
-.tab-scroll {
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
+/* Match card masonry: short cards leave room for the next card below (no empty gap) */
+.match-masonry {
+  columns: 1;
+  column-gap: 1rem;
+}
+@media (min-width: 768px) {
+  .match-masonry {
+    columns: 2;
+  }
+}
+.match-masonry > * {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  page-break-inside: avoid;
+  display: inline-block;
+  width: 100%;
+  margin-bottom: 1rem;
+}
+.match-masonry-tight > * {
+  margin-bottom: 1rem;
+}
+.match-masonry-loose > * {
+  margin-bottom: 1.5rem;
+}
+
+/* Football timer set / + / − feedback */
+@keyframes fp-clock-up {
+  0% {
+    transform: translateY(10px) scale(0.92);
+    opacity: 0.55;
+    filter: brightness(1.35);
+  }
+  55% {
+    transform: translateY(-3px) scale(1.06);
+    opacity: 1;
+    filter: brightness(1.2);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+    filter: brightness(1);
+  }
+}
+
+@keyframes fp-clock-down {
+  0% {
+    transform: translateY(-10px) scale(0.92);
+    opacity: 0.55;
+    filter: brightness(1.35);
+  }
+  55% {
+    transform: translateY(3px) scale(1.06);
+    opacity: 1;
+    filter: brightness(1.2);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+    filter: brightness(1);
+  }
+}
+
+@keyframes fp-clock-set {
+  0% {
+    transform: scale(0.88);
+    opacity: 0.5;
+    letter-spacing: 0.08em;
+  }
+  45% {
+    transform: scale(1.08);
+    opacity: 1;
+    letter-spacing: 0.14em;
+    filter: brightness(1.35);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+    letter-spacing: 0.05em;
+    filter: brightness(1);
+  }
+}
+
+@keyframes fp-extra-bump {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.6;
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.fp-clock-motion-up {
+  animation: fp-clock-up 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.fp-clock-motion-down {
+  animation: fp-clock-down 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.fp-clock-motion-set {
+  animation: fp-clock-set 480ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.fp-extra-motion {
+  animation: fp-extra-bump 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fp-clock-motion-up,
+  .fp-clock-motion-down,
+  .fp-clock-motion-set,
+  .fp-extra-motion {
+    animation: none;
+  }
 }

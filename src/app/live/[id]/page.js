@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Children } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -53,6 +53,11 @@ import {
   footballClockOpts,
   isFootballClockPaused,
   formatEventMinute,
+  footballPeriodShort,
+  footballLiveMinuteLabel,
+  FOOTBALL_PERIODS,
+  normalizeFootballPeriod,
+  completedFootballClockLabel,
 } from "@/lib/footballClock";
 
 const getRoundName = (number, totalRounds, format) =>
@@ -713,7 +718,7 @@ function eventAccent(type) {
 }
 
 /** Sofascore-style football live board */
-function FootballLiveCard({ match }) {
+function FootballLiveCard({ match, tournamentId = null, category = null }) {
   const isLive = match.status === "LIVE";
   const isCompleted = match.status === "COMPLETED";
   const teamA = match.teamA;
@@ -721,6 +726,7 @@ function FootballLiveCard({ match }) {
   const [now, setNow] = useState(() => Date.now());
   const clockOpts = footballClockOpts(match);
   const clockPaused = isFootballClockPaused(match);
+  const fullTimeMinutes = category?.fullTimeMinutes ?? match?.fullTimeMinutes;
 
   useEffect(() => {
     if (!isLive || !match.kickoffAt || clockPaused) return undefined;
@@ -729,14 +735,29 @@ function FootballLiveCard({ match }) {
   }, [isLive, match.kickoffAt, clockPaused]);
 
   const elapsed = footballElapsedSeconds(match.kickoffAt, now, clockOpts);
-  const clockLabel = match.kickoffAt
-    ? formatFootballClock(elapsed)
-    : isLive
-      ? "00:00"
-      : null;
-  const minuteLabel = match.kickoffAt
-    ? `${footballDisplayMinute(match.kickoffAt, now, clockOpts)}'`
-    : null;
+  const clockLabel = isCompleted
+    ? completedFootballClockLabel({
+        fullTimeMinutes,
+        extraTimeMinutes: category?.extraTimeMinutes,
+        stoppageMinutes: match.stoppageMinutes,
+        tournamentId,
+        kickoffAt: match.kickoffAt,
+        clockOpts,
+        now,
+      })
+    : match.kickoffAt
+      ? formatFootballClock(elapsed)
+      : isLive
+        ? "00:00"
+        : null;
+  const period = normalizeFootballPeriod(match.clockPeriod, match.status);
+  const periodShort = footballPeriodShort(match.clockPeriod, match.status);
+  const liveMinute = footballLiveMinuteLabel(match, now, fullTimeMinutes);
+  const minuteLabel =
+    liveMinute ||
+    (match.kickoffAt
+      ? `${footballDisplayMinute(match.kickoffAt, now, clockOpts)}'`
+      : null);
 
   const events = [...(match.events || [])].sort((a, b) => {
     const ma = a.minute ?? 999;
@@ -750,18 +771,22 @@ function FootballLiveCard({ match }) {
   });
 
   return (
-    <div className="rounded-2xl overflow-hidden border border-[#0d472c]/25 bg-white shadow-md">
+    <div className="rounded-2xl overflow-hidden border border-[#0d472c]/25 bg-white shadow-md h-auto">
       <div className="bg-gradient-to-r from-[#0a331f] via-[#0d472c] to-[#0a331f] px-3.5 py-3 text-white">
         <div className="flex items-center justify-between mb-3">
           {isLive ? (
-            clockPaused ? (
+            period === FOOTBALL_PERIODS.HALF_TIME ? (
+              <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold uppercase tracking-wider bg-amber-500 text-white px-2 py-0.5 rounded">
+                HT
+              </span>
+            ) : clockPaused ? (
               <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold uppercase tracking-wider bg-amber-500 text-white px-2 py-0.5 rounded">
                 Paused
               </span>
             ) : (
               <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold uppercase tracking-wider bg-red-600 text-white px-2 py-0.5 rounded">
                 <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                Live
+                Live · {periodShort}
               </span>
             )
           ) : (
@@ -775,19 +800,29 @@ function FootballLiveCard({ match }) {
         </div>
 
         {/* Match timer */}
-        {(isLive || (isCompleted && match.kickoffAt)) && (
+        {(isLive || (isCompleted && clockLabel)) && (
           <div className="mb-3 flex items-center justify-center gap-2 flex-wrap">
             <div
               className={`inline-flex items-center gap-2 bg-black/30 border rounded-xl px-4 py-1.5 ${
-                clockPaused ? "border-amber-400/50" : "border-white/10"
+                clockPaused || period === FOOTBALL_PERIODS.HALF_TIME
+                  ? "border-amber-400/50"
+                  : "border-white/10"
               }`}
             >
               <span className="text-[8px] font-mono uppercase tracking-widest text-white/45">
-                {isCompleted ? "FT clock" : clockPaused ? "Paused" : "Time"}
+                {isCompleted
+                  ? "FT"
+                  : period === FOOTBALL_PERIODS.HALF_TIME
+                    ? "HT"
+                    : clockPaused
+                      ? "Paused"
+                      : periodShort}
               </span>
               <span
                 className={`text-xl sm:text-2xl font-mono font-bold tabular-nums tracking-wider ${
-                  clockPaused ? "text-amber-300" : "text-mustard-gold"
+                  clockPaused || period === FOOTBALL_PERIODS.HALF_TIME
+                    ? "text-amber-300"
+                    : "text-mustard-gold"
                 }`}
               >
                 {clockLabel || "00:00"}
@@ -831,8 +866,19 @@ function FootballLiveCard({ match }) {
               <span className="text-3xl sm:text-4xl text-mustard-gold">{match.scoreB}</span>
             </div>
             <p className="text-[9px] font-mono text-white/40 uppercase mt-1 tracking-wider">
-              {isLive ? "Match in progress" : isCompleted ? "FT" : "Score"}
+              {isLive
+                ? period === FOOTBALL_PERIODS.HALF_TIME
+                  ? "Half-time"
+                  : "Match in progress"
+                : isCompleted
+                  ? "FT"
+                  : "Score"}
             </p>
+            {(match.penaltyScoreA > 0 || match.penaltyScoreB > 0) && (
+              <p className="text-[10px] font-mono text-mustard-gold/80 mt-0.5">
+                Pens {match.penaltyScoreA}-{match.penaltyScoreB}
+              </p>
+            )}
           </div>
 
           <div className="flex flex-col items-center gap-1.5 min-w-0 text-center">
@@ -874,7 +920,11 @@ function FootballLiveCard({ match }) {
                   }`}
                 >
                   <span className="text-slate-400 tabular-nums w-10 shrink-0">
-                    {formatEventMinute(e.minute, match.stoppageMinutes)}
+                    {formatEventMinute(
+                      e.minute,
+                      match.stoppageMinutes,
+                      fullTimeMinutes
+                    )}
                   </span>
                   <span
                     className={`font-semibold text-deep-forest truncate ${
@@ -891,7 +941,7 @@ function FootballLiveCard({ match }) {
         </div>
       )}
 
-      {/* Event timeline */}
+      {/* Event timeline — only when there is data */}
       {events.length > 0 && (
         <div className="px-3.5 py-3">
           <p className="text-[8px] font-mono uppercase tracking-widest text-slate-400 font-bold mb-2">
@@ -907,7 +957,11 @@ function FootballLiveCard({ match }) {
                   className={`w-1.5 h-1.5 rounded-full shrink-0 ${eventAccent(e.type)}`}
                 />
                 <span className="font-mono text-slate-400 tabular-nums w-10 shrink-0">
-                  {formatEventMinute(e.minute, match.stoppageMinutes)}
+                  {formatEventMinute(
+                    e.minute,
+                    match.stoppageMinutes,
+                    fullTimeMinutes
+                  )}
                 </span>
                 <span className="font-semibold text-deep-forest truncate flex-1">
                   {e.player?.name || "—"}
@@ -921,9 +975,10 @@ function FootballLiveCard({ match }) {
         </div>
       )}
 
-      {events.length === 0 && (
-        <div className="px-3.5 py-4 text-center text-[10px] font-mono text-slate-400">
-          {isLive ? "Waiting for first event…" : "No events recorded"}
+      {/* Live only: compact waiting line — completed with no events stays flush */}
+      {events.length === 0 && isLive && (
+        <div className="px-3.5 py-2 text-center text-[10px] font-mono text-slate-400">
+          Waiting for first event…
         </div>
       )}
     </div>
@@ -1115,6 +1170,31 @@ function SetBasedLiveCard({ match, sport }) {
   );
 }
 
+function MasonryMatchGrid({ children, dense = false }) {
+  const items = Children.toArray(children).filter(Boolean);
+  const gap = dense ? "gap-4" : "gap-6";
+
+  if (items.length === 0) return null;
+
+  // One card → full width (don't leave an empty right column)
+  if (items.length === 1) {
+    return <div className={`grid grid-cols-1 ${gap}`}>{items}</div>;
+  }
+
+  // Even → left, odd → right so short left cards get the next card packed underneath
+  const left = items.filter((_, i) => i % 2 === 0);
+  const right = items.filter((_, i) => i % 2 === 1);
+
+  return (
+    <div className={`grid grid-cols-1 md:grid-cols-2 ${gap} items-start`}>
+      <div className={`flex flex-col ${gap} min-w-0`}>{left}</div>
+      {right.length > 0 ? (
+        <div className={`flex flex-col ${gap} min-w-0`}>{right}</div>
+      ) : null}
+    </div>
+  );
+}
+
 function MatchCard({
   match,
   compact = false,
@@ -1122,6 +1202,7 @@ function MatchCard({
   category = null,
   isCricket = false,
   isSetBased = false,
+  tournamentId = null,
 }) {
   const [expanded, setExpanded] = useState(false);
   const isLive = match.status === "LIVE";
@@ -1140,7 +1221,11 @@ function MatchCard({
   ) : isSetBased ? (
     <SetBasedLiveCard match={match} sport={sportKey} />
   ) : (
-    <FootballLiveCard match={match} />
+    <FootballLiveCard
+      match={match}
+      tournamentId={tournamentId}
+      category={category}
+    />
   );
 
   const squadPanel = (
@@ -1205,13 +1290,13 @@ function MatchCard({
 
   return (
     <div
-      className={`w-full bg-white rounded-2xl border-2 p-3 sm:p-4 transition-all ${
+      className={`w-full h-fit max-h-none self-start bg-white rounded-2xl border-2 p-3 sm:p-4 transition-all flex flex-col ${
         isLive
           ? "border-red-400 shadow-md ring-2 ring-red-100"
           : "border-dashed border-mustard-gold/70"
       }`}
     >
-      <div className="flex flex-wrap justify-between items-center mb-3 gap-2">
+      <div className="flex flex-wrap justify-between items-center mb-3 gap-2 shrink-0">
         <span
           className={`text-[9px] font-mono font-bold px-2.5 py-1 rounded border tracking-wider shrink-0 ${
             isLive
@@ -1248,16 +1333,16 @@ function MatchCard({
       </div>
 
       {usePolishedBoard ? (
-        <div className="space-y-3">
-          {liveBoard}
+        <div className="flex flex-col gap-2 h-fit shrink-0">
+          <div className="h-fit shrink-0">{liveBoard}</div>
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            className="w-full text-[10px] font-mono font-bold uppercase tracking-wider text-deep-forest/50 hover:text-deep-forest py-2 border border-dashed border-slate-200 rounded-xl cursor-pointer"
+            className="w-full shrink-0 text-[10px] font-mono font-bold uppercase tracking-wider text-deep-forest/50 hover:text-deep-forest py-2 border border-dashed border-slate-200 rounded-xl cursor-pointer"
           >
             {expanded ? "Hide squads" : "Show squads"}
           </button>
-          {expanded ? squadPanel : null}
+          {expanded ? <div className="h-fit shrink-0">{squadPanel}</div> : null}
         </div>
       ) : (
         <button
@@ -1996,7 +2081,7 @@ export default function PublicLiveBoard() {
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <MasonryMatchGrid>
                   {categoryLiveMatches.map((m) => (
                     <MatchCard
                       key={m.id}
@@ -2005,9 +2090,10 @@ export default function PublicLiveBoard() {
                       category={activeCategory}
                       isCricket={isCricket}
                       isSetBased={isSetBased}
+                      tournamentId={id}
                     />
                   ))}
-                </div>
+                </MasonryMatchGrid>
               )}
             </div>
 
@@ -2031,7 +2117,7 @@ export default function PublicLiveBoard() {
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <MasonryMatchGrid dense>
                   {[...categoryCompletedMatches].reverse().map((m) => (
                     <MatchCard
                       key={m.id}
@@ -2041,9 +2127,10 @@ export default function PublicLiveBoard() {
                       category={activeCategory}
                       isCricket={isCricket}
                       isSetBased={isSetBased}
+                      tournamentId={id}
                     />
                   ))}
-                </div>
+                </MasonryMatchGrid>
               )}
             </div>
           </section>
@@ -2075,7 +2162,7 @@ export default function PublicLiveBoard() {
                       {round.matches.length} matches
                     </span>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <MasonryMatchGrid dense>
                     {round.matches.map((m) => (
                       <MatchCard
                         key={m.id}
@@ -2085,9 +2172,10 @@ export default function PublicLiveBoard() {
                         category={activeCategory}
                         isCricket={isCricket}
                         isSetBased={isSetBased}
+                        tournamentId={id}
                       />
                     ))}
-                  </div>
+                  </MasonryMatchGrid>
                 </div>
               ))
             )}

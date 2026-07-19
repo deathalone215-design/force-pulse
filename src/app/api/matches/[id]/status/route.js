@@ -10,6 +10,17 @@ import {
   parseExpectedVersion,
   parseLockToken,
 } from "@/lib/matchCas";
+import {
+  FOOTBALL_PERIODS,
+  footballElapsedSeconds,
+  footballFullSeconds,
+  footballHalfSeconds,
+  kickoffForElapsed,
+  kickoffFromEvent,
+  normalizeFootballPeriod,
+  resolveExtraMinutes,
+  resolveFullTimeMinutes,
+} from "@/lib/footballClock";
 
 function parseElapsedSeconds(body) {
   if (body.elapsedSeconds != null) {
@@ -29,12 +40,25 @@ function parseElapsedSeconds(body) {
   return undefined; // not provided
 }
 
+const PERIOD_ACTIONS = new Set([
+  "end_first_half",
+  "start_second_half",
+  "end_match",
+]);
+
 export async function POST(request, { params }) {
   try {
     const { id } = await params;
     const body = await request.json();
-    const { status, resetClock, stoppageMinutes, clockAction, claimLock, releaseLock } =
-      body;
+    const {
+      status,
+      resetClock,
+      stoppageMinutes,
+      clockAction,
+      claimLock,
+      releaseLock,
+      periodAction,
+    } = body;
     const elapsedParsed = parseElapsedSeconds(body);
     const hasSetClock = elapsedParsed !== undefined;
     const expectedVersion = parseExpectedVersion(body);
@@ -45,6 +69,8 @@ export async function POST(request, { params }) {
     const hasReset = Boolean(resetClock);
     const hasClockAction = clockAction === "pause" || clockAction === "resume";
     const hasLockAction = Boolean(claimLock) || Boolean(releaseLock);
+    const hasPeriodAction =
+      periodAction != null && PERIOD_ACTIONS.has(String(periodAction));
 
     if (
       !hasStatus &&
@@ -52,12 +78,13 @@ export async function POST(request, { params }) {
       !hasReset &&
       !hasClockAction &&
       !hasSetClock &&
-      !hasLockAction
+      !hasLockAction &&
+      !hasPeriodAction
     ) {
       return NextResponse.json(
         {
           error:
-            "Provide status, stoppageMinutes, resetClock, clockAction, setClock, and/or lock action",
+            "Provide status, stoppageMinutes, resetClock, clockAction, setClock, periodAction, and/or lock action",
         },
         { status: 400 }
       );
@@ -66,6 +93,16 @@ export async function POST(request, { params }) {
     if (hasSetClock && elapsedParsed === null) {
       return NextResponse.json(
         { error: "Time must look like MM:SS (example 12:30)" },
+        { status: 400 }
+      );
+    }
+
+    if (periodAction != null && !hasPeriodAction) {
+      return NextResponse.json(
+        {
+          error:
+            "periodAction must be end_first_half, start_second_half, or end_match",
+        },
         { status: 400 }
       );
     }
@@ -79,14 +116,37 @@ export async function POST(request, { params }) {
         clockPausedAt: true,
         pausedSeconds: true,
         stoppageMinutes: true,
+        clockPeriod: true,
         version: true,
         scoreLockId: true,
         scoreLockedAt: true,
+        round: {
+          select: {
+            category: {
+              select: {
+                tournamentId: true,
+                fullTimeMinutes: true,
+                extraTimeMinutes: true,
+              },
+            },
+          },
+        },
       },
     });
     if (!existing) {
       return NextResponse.json({ error: "Match not found" }, { status: 404 });
     }
+
+    const category = existing.round?.category;
+    const tournamentId = category?.tournamentId;
+    const fullTimeMins = resolveFullTimeMinutes(
+      category?.fullTimeMinutes,
+      tournamentId
+    );
+    const halfSec = footballHalfSeconds(category?.fullTimeMinutes, tournamentId);
+    const fullSec = footballFullSeconds(category?.fullTimeMinutes, tournamentId);
+    const categoryExtra = resolveExtraMinutes(0, category?.extraTimeMinutes);
+    const fixedFt = fullTimeMins != null;
 
     // Lock claim/release can proceed without write lock assert first
     if (!releaseLock && !claimLock) {
@@ -115,10 +175,33 @@ export async function POST(request, { params }) {
       data.status = status;
 
       if (status === "LIVE") {
-        if (!existing.kickoffAt || resetClock) {
+        // Never overwrite an existing kickoff unless explicit resetClock.
+        // If events already exist (scored before Start), derive kickoff from them
+        // so the clock does not jump back to 00:00 with score already on the board.
+        if (resetClock) {
+          // Reset lands at 00:00 paused — Resume starts the clock.
           data.kickoffAt = now;
+          data.clockPausedAt = now;
+          data.pausedSeconds = 0;
+          data.clockPeriod = FOOTBALL_PERIODS.FIRST_HALF;
+          data.stoppageMinutes = 0;
+        } else if (!existing.kickoffAt) {
+          const firstEvent = await prisma.matchEvent.findFirst({
+            where: { matchId: id },
+            orderBy: { createdAt: "asc" },
+            select: { createdAt: true, minute: true },
+          });
+          data.kickoffAt = firstEvent
+            ? kickoffFromEvent(firstEvent, now)
+            : now;
           data.clockPausedAt = null;
           data.pausedSeconds = 0;
+          data.clockPeriod = FOOTBALL_PERIODS.FIRST_HALF;
+        } else if (
+          normalizeFootballPeriod(existing.clockPeriod, existing.status) ===
+          FOOTBALL_PERIODS.FULL_TIME
+        ) {
+          data.clockPeriod = FOOTBALL_PERIODS.FIRST_HALF;
         }
         // Auto-claim lock when going live if token present
         if (lockToken && !claimLock) {
@@ -133,14 +216,25 @@ export async function POST(request, { params }) {
         data.clockPausedAt = null;
         data.pausedSeconds = 0;
         data.stoppageMinutes = 0;
+        data.clockPeriod = FOOTBALL_PERIODS.FIRST_HALF;
         data.penaltyScoreA = 0;
         data.penaltyScoreB = 0;
         data.scoreLockId = null;
         data.scoreLockedAt = null;
       } else if (status === "COMPLETED") {
-        if (existing.kickoffAt && !existing.clockPausedAt) {
+        // Use category full time when recorded (e.g. 20' + optional extra)
+        if (fixedFt) {
+          Object.assign(
+            data,
+            kickoffForElapsed(fullTimeMins * 60, now, true)
+          );
+          if (categoryExtra > 0 && !(existing.stoppageMinutes > 0)) {
+            data.stoppageMinutes = categoryExtra;
+          }
+        } else if (existing.kickoffAt && !existing.clockPausedAt) {
           data.clockPausedAt = now;
         }
+        data.clockPeriod = FOOTBALL_PERIODS.FULL_TIME;
         data.scoreLockId = null;
         data.scoreLockedAt = null;
       }
@@ -148,8 +242,10 @@ export async function POST(request, { params }) {
 
     if (resetClock && (status === "LIVE" || existing.status === "LIVE" || data.status === "LIVE")) {
       data.kickoffAt = now;
-      data.clockPausedAt = null;
+      data.clockPausedAt = now;
       data.pausedSeconds = 0;
+      data.clockPeriod = FOOTBALL_PERIODS.FIRST_HALF;
+      data.stoppageMinutes = 0;
       if (status == null) data.status = "LIVE";
     }
 
@@ -164,6 +260,64 @@ export async function POST(request, { params }) {
       data.clockPausedAt = keepPaused ? now : null;
       if ((data.status || existing.status) !== "LIVE") {
         data.status = "LIVE";
+      }
+      // Infer period from set time if not already changing via periodAction
+      if (!hasPeriodAction) {
+        if (elapsedParsed >= fullSec) {
+          data.clockPeriod = FOOTBALL_PERIODS.SECOND_HALF;
+        } else if (elapsedParsed >= halfSec) {
+          data.clockPeriod = FOOTBALL_PERIODS.SECOND_HALF;
+        } else {
+          data.clockPeriod = FOOTBALL_PERIODS.FIRST_HALF;
+        }
+      }
+    }
+
+    if (hasPeriodAction) {
+      const action = String(periodAction);
+      const currentElapsed = footballElapsedSeconds(
+        data.kickoffAt || existing.kickoffAt,
+        now.getTime(),
+        {
+          clockPausedAt:
+            data.clockPausedAt !== undefined
+              ? data.clockPausedAt
+              : existing.clockPausedAt,
+          pausedSeconds:
+            data.pausedSeconds !== undefined
+              ? data.pausedSeconds
+              : existing.pausedSeconds,
+        }
+      );
+
+      if (action === "end_first_half") {
+        const target = Math.max(currentElapsed, halfSec);
+        Object.assign(data, kickoffForElapsed(target, now, true));
+        data.status = "LIVE";
+        data.clockPeriod = FOOTBALL_PERIODS.HALF_TIME;
+        data.stoppageMinutes = 0;
+      } else if (action === "start_second_half") {
+        Object.assign(data, kickoffForElapsed(halfSec, now, false));
+        data.status = "LIVE";
+        data.clockPeriod = FOOTBALL_PERIODS.SECOND_HALF;
+        data.stoppageMinutes = 0;
+      } else if (action === "end_match") {
+        if (fixedFt) {
+          Object.assign(
+            data,
+            kickoffForElapsed(fullTimeMins * 60, now, true)
+          );
+          if (categoryExtra > 0 && !(existing.stoppageMinutes > 0)) {
+            data.stoppageMinutes = categoryExtra;
+          }
+        } else {
+          const target = Math.max(currentElapsed, fullSec);
+          Object.assign(data, kickoffForElapsed(target, now, true));
+        }
+        data.status = "COMPLETED";
+        data.clockPeriod = FOOTBALL_PERIODS.FULL_TIME;
+        data.scoreLockId = null;
+        data.scoreLockedAt = null;
       }
     }
 
@@ -187,10 +341,23 @@ export async function POST(request, { params }) {
           data.clockPausedAt = now;
         }
       } else if (clockAction === "resume") {
+        const period = normalizeFootballPeriod(
+          data.clockPeriod ?? existing.clockPeriod,
+          liveStatus
+        );
+        if (period === FOOTBALL_PERIODS.HALF_TIME && !hasPeriodAction) {
+          return NextResponse.json(
+            { error: "Use Start 2nd half to resume after half-time" },
+            { status: 400 }
+          );
+        }
         const pausedAtRaw = existing.clockPausedAt;
         if (pausedAtRaw) {
           const pausedAt = new Date(pausedAtRaw).getTime();
-          const addSec = Math.max(0, Math.floor((now.getTime() - pausedAt) / 1000));
+          const addSec = Math.max(
+            0,
+            Math.floor((now.getTime() - pausedAt) / 1000)
+          );
           data.pausedSeconds = (existing.pausedSeconds || 0) + addSec;
           data.clockPausedAt = null;
         } else if (data.clockPausedAt) {

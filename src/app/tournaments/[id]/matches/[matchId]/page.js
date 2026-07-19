@@ -21,6 +21,12 @@ import {
   footballClockOpts,
   isFootballClockPaused,
   formatEventMinute,
+  FOOTBALL_PERIODS,
+  normalizeFootballPeriod,
+  footballPeriodLabel,
+  footballPeriodShort,
+  footballLiveMinuteLabel,
+  completedFootballClockLabel,
 } from "@/lib/footballClock";
 import {
   mergeMatchFromApi,
@@ -110,10 +116,35 @@ export default function MatchScorerPage() {
   const [editingClock, setEditingClock] = useState(false);
   const [clockInput, setClockInput] = useState("00:00");
   const [savingClock, setSavingClock] = useState(false);
+  /** Visual pulse when clock is set / jumped: "up" | "down" | "set" */
+  const [clockMotion, setClockMotion] = useState(null);
+  const [extraMotion, setExtraMotion] = useState(null);
   // Ignore late full-tournament GETs; prefer match-scoped refresh after load.
   const fetchGenRef = useRef(0);
   const deletedEventIdsRef = useRef(new Set());
   const pendingWritesRef = useRef(0);
+  const prevClockSecRef = useRef(null);
+  const clockMotionTimerRef = useRef(null);
+  const extraMotionTimerRef = useRef(null);
+
+  const pulseClockMotion = useCallback((kind) => {
+    if (clockMotionTimerRef.current) clearTimeout(clockMotionTimerRef.current);
+    setClockMotion(null);
+    // Retrigger CSS animation even if same direction twice
+    requestAnimationFrame(() => {
+      setClockMotion(kind);
+      clockMotionTimerRef.current = setTimeout(() => setClockMotion(null), 500);
+    });
+  }, []);
+
+  const pulseExtraMotion = useCallback(() => {
+    if (extraMotionTimerRef.current) clearTimeout(extraMotionTimerRef.current);
+    setExtraMotion(null);
+    requestAnimationFrame(() => {
+      setExtraMotion("bump");
+      extraMotionTimerRef.current = setTimeout(() => setExtraMotion(null), 360);
+    });
+  }, []);
 
   /** Initial load only — full tournament for category / round context. */
   const fetchTournament = useCallback(
@@ -202,6 +233,7 @@ export default function MatchScorerPage() {
 
   const ctx = tournament ? findMatchContext(tournament, matchId) : null;
   const match = ctx?.match;
+  const categoryEarly = ctx?.category;
 
   // Football live clock tick (freeze while paused for injury / interruption)
   useEffect(() => {
@@ -213,16 +245,45 @@ export default function MatchScorerPage() {
 
   const clockOpts = footballClockOpts(match);
   const clockPaused = isFootballClockPaused(match);
-  const footballClock =
+  const footballElapsed =
     match?.kickoffAt != null
-      ? formatFootballClock(
-          footballElapsedSeconds(match.kickoffAt, clockNow, clockOpts)
-        )
-      : "00:00";
+      ? footballElapsedSeconds(match.kickoffAt, clockNow, clockOpts)
+      : 0;
+  const footballClock =
+    match?.kickoffAt != null ? formatFootballClock(footballElapsed) : "00:00";
   const suggestedMinute =
     match?.kickoffAt != null
       ? footballMatchMinute(match.kickoffAt, clockNow, clockOpts)
       : null;
+  const clockPeriod = normalizeFootballPeriod(match?.clockPeriod, match?.status);
+  const periodLabel = footballPeriodLabel(match?.clockPeriod, match?.status);
+  const periodShort = footballPeriodShort(match?.clockPeriod, match?.status);
+  const liveMinuteLabel =
+    match?.kickoffAt != null
+      ? footballLiveMinuteLabel(
+          match,
+          clockNow,
+          categoryEarly?.fullTimeMinutes
+        )
+      : null;
+
+  // Animate when clock jumps (manual set / reset), not on normal 1s ticks
+  useEffect(() => {
+    const prev = prevClockSecRef.current;
+    prevClockSecRef.current = footballElapsed;
+    if (prev == null || match?.status !== "LIVE") return;
+    const delta = footballElapsed - prev;
+    if (Math.abs(delta) <= 1) return;
+    if (delta > 0) pulseClockMotion("up");
+    else pulseClockMotion("down");
+  }, [footballElapsed, match?.status, pulseClockMotion]);
+
+  useEffect(() => {
+    return () => {
+      if (clockMotionTimerRef.current) clearTimeout(clockMotionTimerRef.current);
+      if (extraMotionTimerRef.current) clearTimeout(extraMotionTimerRef.current);
+    };
+  }, []);
 
   const applyMatchUpdate = useCallback(
     (update, { addEvent, removeEventId, force = true } = {}) => {
@@ -313,11 +374,12 @@ export default function MatchScorerPage() {
     await withWrite(async () => {
       try {
         setUpdatingStatus(true);
+        const nowIso = new Date().toISOString();
         const nextKickoff =
           newStatus === "SCHEDULED"
             ? null
             : newStatus === "LIVE" && (!match?.kickoffAt || resetClock)
-              ? new Date().toISOString()
+              ? nowIso
               : undefined;
         applyMatchUpdate({
           status: newStatus,
@@ -331,7 +393,10 @@ export default function MatchScorerPage() {
                 pausedSeconds: 0,
               }
             : {}),
-          ...(resetClock ? { clockPausedAt: null, pausedSeconds: 0 } : {}),
+          // Reset → 00:00 and stay paused until Resume
+          ...(resetClock
+            ? { clockPausedAt: nowIso, pausedSeconds: 0 }
+            : {}),
         });
         if (nextKickoff) setClockNow(Date.now());
         const res = await fetch(`/api/matches/${matchId}/status`, {
@@ -362,6 +427,7 @@ export default function MatchScorerPage() {
             penaltyScoreB: data.penaltyScoreB,
             clockPausedAt: data.clockPausedAt,
             pausedSeconds: data.pausedSeconds,
+            clockPeriod: data.clockPeriod,
             updatedAt: data.updatedAt,
             version: data.version,
             scoreLockId: data.scoreLockId,
@@ -387,7 +453,8 @@ export default function MatchScorerPage() {
   };
 
   const resetFootballClock = async () => {
-    if (!window.confirm("Reset the clock to 00:00?")) return;
+    if (!window.confirm("Reset clock to 00:00 (1st half) and pause? Press Resume to start."))
+      return;
     try {
       setResettingClock(true);
       await updateMatchStatus("LIVE", { resetClock: true });
@@ -396,11 +463,113 @@ export default function MatchScorerPage() {
     }
   };
 
+  const applyPeriodAction = async (periodAction) => {
+    if (updatingStatus || !match) return;
+    const messages = {
+      end_first_half: "End 1st half and go to half-time?",
+      start_second_half: "Start 2nd half from 45:00?",
+      end_match: "End match (full time)?",
+    };
+    if (!window.confirm(messages[periodAction] || "Continue?")) return;
+    await withWrite(async () => {
+      try {
+        setUpdatingStatus(true);
+        const res = await fetch(`/api/matches/${matchId}/status`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            periodAction,
+            ...casFields(match, matchId),
+          }),
+          credentials: "include",
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          if (isCasConflict(res, data) && data?.match) applyMatchUpdate(data.match);
+          throw new Error(casErrorMessage(res, data, "Failed to update period"));
+        }
+        applyMatchUpdate({
+          status: data.status,
+          kickoffAt: data.kickoffAt,
+          clockPausedAt: data.clockPausedAt,
+          pausedSeconds: data.pausedSeconds,
+          stoppageMinutes: data.stoppageMinutes,
+          clockPeriod: data.clockPeriod,
+          updatedAt: data.updatedAt,
+          version: data.version,
+          scoreLockId: data.scoreLockId,
+          scoreLockedAt: data.scoreLockedAt,
+        });
+        setClockNow(Date.now());
+      } catch (err) {
+        alert(err.message);
+        await refreshMatch();
+      } finally {
+        setUpdatingStatus(false);
+      }
+    });
+  };
+
   const openClockEditor = () => {
     if (match?.status !== "LIVE" || updatingStatus || savingClock) return;
     setClockInput(footballClock || "00:00");
     setEditingClock(true);
   };
+
+  const parseClockInputParts = useCallback((raw) => {
+    const m = String(raw || "").trim().match(/^(\d{1,3})\s*:\s*(\d{1,2})$/);
+    if (!m) return null;
+    return {
+      minutes: parseInt(m[1], 10),
+      seconds: Math.min(59, parseInt(m[2], 10)),
+    };
+  }, []);
+
+  const formatClockParts = useCallback((minutes, seconds) => {
+    const total = Math.max(
+      0,
+      Math.min(180 * 60, Math.max(0, minutes) * 60 + Math.max(0, Math.min(59, seconds)))
+    );
+    return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+  }, []);
+
+  const nudgeClockInput = useCallback(
+    (unit, delta) => {
+      const parts = parseClockInputParts(clockInput);
+      if (!parts) {
+        setClockInput(footballClock || "00:00");
+        return;
+      }
+      let { minutes, seconds } = parts;
+      if (unit === "minute") minutes += delta;
+      else seconds += delta;
+      // Carry seconds into minutes
+      while (seconds >= 60) {
+        seconds -= 60;
+        minutes += 1;
+      }
+      while (seconds < 0) {
+        if (minutes <= 0) {
+          minutes = 0;
+          seconds = 0;
+          break;
+        }
+        minutes -= 1;
+        seconds += 60;
+      }
+      if (minutes < 0) {
+        minutes = 0;
+        seconds = 0;
+      }
+      if (minutes > 180) {
+        minutes = 180;
+        seconds = 0;
+      }
+      setClockInput(formatClockParts(minutes, seconds));
+    },
+    [clockInput, footballClock, formatClockParts, parseClockInputParts]
+  );
 
   const saveClockTime = async () => {
     const raw = String(clockInput || "").trim();
@@ -408,6 +577,10 @@ export default function MatchScorerPage() {
       alert("Enter time like 12:30");
       return;
     }
+    const parts = raw.match(/^(\d{1,3})\s*:\s*(\d{1,2})$/);
+    const nextSec =
+      parseInt(parts[1], 10) * 60 + Math.min(59, parseInt(parts[2], 10));
+    const sameTime = nextSec === footballElapsed;
     await withWrite(async () => {
       try {
         setSavingClock(true);
@@ -427,12 +600,14 @@ export default function MatchScorerPage() {
           kickoffAt: data.kickoffAt,
           clockPausedAt: data.clockPausedAt,
           pausedSeconds: data.pausedSeconds,
+          clockPeriod: data.clockPeriod,
           status: data.status || "LIVE",
           updatedAt: data.updatedAt,
           version: data.version,
         });
         setClockNow(Date.now());
         setEditingClock(false);
+        if (sameTime) pulseClockMotion("set");
       } catch (err) {
         alert(err.message);
         await refreshMatch();
@@ -443,7 +618,9 @@ export default function MatchScorerPage() {
   };
 
   const setStoppageMinutes = async (value) => {
+    const prev = match?.stoppageMinutes || 0;
     const n = Math.max(0, Math.min(30, parseInt(value, 10) || 0));
+    if (n !== prev) pulseExtraMotion();
     await withWrite(async () => {
       applyMatchUpdate({ stoppageMinutes: n });
       try {
@@ -674,6 +851,10 @@ export default function MatchScorerPage() {
     });
   };
 
+  const clockEditParts = editingClock
+    ? parseClockInputParts(clockInput)
+    : null;
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-screen bg-cream-bg gap-4">
@@ -750,6 +931,15 @@ export default function MatchScorerPage() {
                 {tournament.name}
                 {isCricket && category?.oversPerInnings
                   ? ` · ${category.oversPerInnings} overs`
+                  : ""}
+                {!isCricket &&
+                !isSetBased &&
+                category?.fullTimeMinutes
+                  ? ` · ${category.fullTimeMinutes}'${
+                      category.extraTimeMinutes
+                        ? `+${category.extraTimeMinutes}`
+                        : ""
+                    }`
                   : ""}
                 {category ? ` · ${category.name}` : ""}
                 {ctx.round
@@ -836,130 +1026,366 @@ export default function MatchScorerPage() {
             </div>
 
             {match.status === "LIVE" && (
-              <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-wrap">
+              <div className="w-full max-w-lg rounded-2xl bg-gradient-to-b from-[#0a331f] to-[#06371d] border border-mustard-gold/30 p-3.5 sm:p-4 space-y-3 shadow-[0_8px_24px_rgba(0,0,0,0.25)]">
                 {editingClock ? (
-                  <div className="flex items-center gap-2 bg-[#093c24] border border-mustard-gold rounded-xl px-3 py-2">
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      autoFocus
-                      value={clockInput}
-                      onChange={(e) => setClockInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") saveClockTime();
-                        if (e.key === "Escape") setEditingClock(false);
-                      }}
-                      placeholder="MM:SS"
-                      className="w-[5.5rem] bg-transparent text-2xl font-mono font-bold text-mustard-gold tabular-nums outline-none text-center"
-                    />
-                    <button
-                      type="button"
-                      disabled={savingClock}
-                      onClick={saveClockTime}
-                      className="text-xs font-bold bg-mustard-gold text-[#0d472c] rounded-lg px-3 py-2 cursor-pointer disabled:opacity-50"
-                    >
-                      {savingClock ? "…" : "Set"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={savingClock}
-                      onClick={() => setEditingClock(false)}
-                      className="text-xs font-bold text-white/70 border border-white/20 rounded-lg px-3 py-2 cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                  </div>
+                  <>
+                    <div className="rounded-2xl bg-[#041f12]/70 border border-mustard-gold/50 px-3 sm:px-4 py-4 space-y-3">
+                      <div className="flex items-center justify-between gap-2 px-1">
+                        <span className="text-[10px] font-mono uppercase tracking-[0.22em] text-mustard-gold/80">
+                          Set time
+                        </span>
+                        <span className="text-[10px] font-mono text-white/35">
+                          MM : SS
+                        </span>
+                      </div>
+
+                      <div className="flex items-end justify-center gap-2 sm:gap-3">
+                        {/* Minutes */}
+                        <div className="flex flex-col items-center gap-1.5">
+                          <span className="text-[9px] font-mono uppercase tracking-[0.18em] text-white/40">
+                            Min
+                          </span>
+                          <button
+                            type="button"
+                            disabled={savingClock}
+                            onClick={() => nudgeClockInput("minute", 1)}
+                            className="w-11 h-10 rounded-xl bg-[#06371d] border border-white/15 text-white text-xl font-bold cursor-pointer hover:border-mustard-gold/50 hover:bg-white/5 disabled:opacity-40 transition-colors"
+                            title="+1 minute"
+                          >
+                            +
+                          </button>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            autoFocus
+                            value={
+                              clockEditParts
+                                ? String(clockEditParts.minutes).padStart(2, "0")
+                                : "00"
+                            }
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(/\D/g, "").slice(0, 3);
+                              const secs = clockEditParts?.seconds ?? 0;
+                              const mins = raw === "" ? 0 : parseInt(raw, 10);
+                              if (!Number.isFinite(mins)) return;
+                              setClockInput(formatClockParts(mins, secs));
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveClockTime();
+                              if (e.key === "Escape") setEditingClock(false);
+                              if (e.key === "ArrowUp") {
+                                e.preventDefault();
+                                nudgeClockInput("minute", 1);
+                              }
+                              if (e.key === "ArrowDown") {
+                                e.preventDefault();
+                                nudgeClockInput("minute", -1);
+                              }
+                            }}
+                            className="w-[4.25rem] sm:w-[4.75rem] bg-[#06371d]/80 border border-mustard-gold/35 rounded-xl text-center text-3xl sm:text-4xl font-mono font-bold text-mustard-gold tabular-nums outline-none tracking-wider caret-mustard-gold py-2 focus:border-mustard-gold"
+                          />
+                          <button
+                            type="button"
+                            disabled={savingClock}
+                            onClick={() => nudgeClockInput("minute", -1)}
+                            className="w-11 h-10 rounded-xl bg-[#06371d] border border-white/15 text-white text-xl font-bold cursor-pointer hover:border-mustard-gold/50 hover:bg-white/5 disabled:opacity-40 transition-colors"
+                            title="−1 minute"
+                          >
+                            −
+                          </button>
+                        </div>
+
+                        <span className="pb-[3.15rem] text-3xl sm:text-4xl font-mono font-bold text-mustard-gold/70 select-none">
+                          :
+                        </span>
+
+                        {/* Seconds */}
+                        <div className="flex flex-col items-center gap-1.5">
+                          <span className="text-[9px] font-mono uppercase tracking-[0.18em] text-white/40">
+                            Sec
+                          </span>
+                          <button
+                            type="button"
+                            disabled={savingClock}
+                            onClick={() => nudgeClockInput("second", 1)}
+                            className="w-11 h-10 rounded-xl bg-[#06371d] border border-white/15 text-white text-xl font-bold cursor-pointer hover:border-mustard-gold/50 hover:bg-white/5 disabled:opacity-40 transition-colors"
+                            title="+1 second"
+                          >
+                            +
+                          </button>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={
+                              clockEditParts
+                                ? String(clockEditParts.seconds).padStart(2, "0")
+                                : "00"
+                            }
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(/\D/g, "").slice(0, 2);
+                              const mins = clockEditParts?.minutes ?? 0;
+                              let secs = raw === "" ? 0 : parseInt(raw, 10);
+                              if (!Number.isFinite(secs)) return;
+                              if (secs > 59) secs = 59;
+                              setClockInput(formatClockParts(mins, secs));
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveClockTime();
+                              if (e.key === "Escape") setEditingClock(false);
+                              if (e.key === "ArrowUp") {
+                                e.preventDefault();
+                                nudgeClockInput("second", 1);
+                              }
+                              if (e.key === "ArrowDown") {
+                                e.preventDefault();
+                                nudgeClockInput("second", -1);
+                              }
+                            }}
+                            className="w-[4.25rem] sm:w-[4.75rem] bg-[#06371d]/80 border border-mustard-gold/35 rounded-xl text-center text-3xl sm:text-4xl font-mono font-bold text-mustard-gold tabular-nums outline-none tracking-wider caret-mustard-gold py-2 focus:border-mustard-gold"
+                          />
+                          <button
+                            type="button"
+                            disabled={savingClock}
+                            onClick={() => nudgeClockInput("second", -1)}
+                            className="w-11 h-10 rounded-xl bg-[#06371d] border border-white/15 text-white text-xl font-bold cursor-pointer hover:border-mustard-gold/50 hover:bg-white/5 disabled:opacity-40 transition-colors"
+                            title="−1 second"
+                          >
+                            −
+                          </button>
+                        </div>
+                      </div>
+
+                      <p className="text-center text-[10px] text-white/35 font-mono">
+                        Adjust minutes and seconds separately
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        disabled={savingClock}
+                        onClick={() => setEditingClock(false)}
+                        className="min-h-[48px] text-sm font-bold text-white/80 border border-white/20 rounded-xl hover:bg-white/5 cursor-pointer disabled:opacity-50 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingClock}
+                        onClick={saveClockTime}
+                        className="min-h-[48px] text-sm font-bold bg-mustard-gold text-[#0d472c] rounded-xl hover:bg-mustard-gold-hover cursor-pointer disabled:opacity-50 transition-colors shadow-[0_0_0_1px_rgba(229,169,59,0.35)]"
+                      >
+                        {savingClock ? "Saving…" : "Set time"}
+                      </button>
+                    </div>
+                  </>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={openClockEditor}
-                    title="Tap to set time"
-                    className={`flex items-center justify-center gap-2 bg-[#093c24] border rounded-xl px-4 py-2 cursor-pointer hover:bg-[#0a331f] transition-colors ${
-                      clockPaused
-                        ? "border-amber-400/70"
-                        : "border-mustard-gold/40"
-                    }`}
-                  >
-                    <span className="text-[8px] font-mono uppercase tracking-widest text-white/45">
-                      {clockPaused ? "Paused" : "Time"}
-                    </span>
-                    <span
-                      className={`text-2xl font-mono font-bold tabular-nums tracking-wider ${
-                        clockPaused ? "text-amber-300" : "text-mustard-gold"
+                  <>
+                    <div className="flex items-center justify-between gap-2 px-0.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {[
+                          {
+                            id: FOOTBALL_PERIODS.FIRST_HALF,
+                            label: "1H",
+                          },
+                          {
+                            id: FOOTBALL_PERIODS.HALF_TIME,
+                            label: "HT",
+                          },
+                          {
+                            id: FOOTBALL_PERIODS.SECOND_HALF,
+                            label: "2H",
+                          },
+                          {
+                            id: FOOTBALL_PERIODS.FULL_TIME,
+                            label: "FT",
+                          },
+                        ].map((p) => {
+                          const active = clockPeriod === p.id;
+                          return (
+                            <span
+                              key={p.id}
+                              className={`text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-1 rounded-lg border ${
+                                active
+                                  ? "bg-mustard-gold text-[#0d472c] border-mustard-gold"
+                                  : "bg-transparent text-white/35 border-white/10"
+                              }`}
+                            >
+                              {p.label}
+                            </span>
+                          );
+                        })}
+                      </div>
+                      {liveMinuteLabel && (
+                        <span className="text-xs font-mono font-bold text-mustard-gold/90 tabular-nums">
+                          {liveMinuteLabel}
+                        </span>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={openClockEditor}
+                      title="Tap to set time"
+                      className={`group relative flex items-center gap-3 sm:gap-4 w-full rounded-2xl px-4 sm:px-5 py-4 cursor-pointer transition-all hover:brightness-110 ${
+                        clockPaused
+                          ? "bg-[#1a2e14] border border-amber-400/55"
+                          : "bg-[#041f12]/80 border border-mustard-gold/35"
                       }`}
                     >
-                      {footballClock}
-                    </span>
-                    <span className="text-[9px] font-mono text-white/40 hidden sm:inline">
-                      tap to set
-                    </span>
-                  </button>
-                )}
-
-                <div className="flex items-center gap-2 flex-wrap">
-                  <button
-                    type="button"
-                    onClick={toggleFootballClockPause}
-                    disabled={updatingStatus || !match.kickoffAt || editingClock}
-                    className={`text-xs font-bold rounded-lg px-3 py-2 border cursor-pointer disabled:opacity-50 min-h-[40px] ${
-                      clockPaused
-                        ? "text-emerald-300 border-emerald-400/50 hover:bg-emerald-400/10"
-                        : "text-amber-300 border-amber-400/50 hover:bg-amber-400/10"
-                    }`}
-                  >
-                    {clockPaused ? "Resume" : "Pause"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={resetFootballClock}
-                    disabled={resettingClock || updatingStatus || editingClock}
-                    className="text-xs font-bold text-mustard-gold border border-mustard-gold/40 rounded-lg px-3 py-2 hover:bg-mustard-gold/10 cursor-pointer disabled:opacity-50 min-h-[40px]"
-                  >
-                    {resettingClock ? "…" : "Reset"}
-                  </button>
-                  <div className="flex items-center gap-1.5 bg-[#093c24] border border-white/15 rounded-xl px-2 py-1.5">
-                    <span className="text-[8px] font-mono uppercase text-white/45 tracking-wider px-1">
-                      Extra
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setStoppageMinutes((match.stoppageMinutes || 0) - 1)
-                      }
-                      className="w-8 h-8 rounded-lg bg-white/10 text-white font-bold cursor-pointer hover:bg-white/20"
-                    >
-                      −
+                      <div className="flex flex-col items-start gap-1 shrink-0">
+                        <span className="text-[10px] font-mono uppercase tracking-[0.22em] text-white/40">
+                          Time
+                        </span>
+                        <span className="text-[9px] font-mono uppercase tracking-wider text-mustard-gold/70">
+                          {periodShort}
+                        </span>
+                      </div>
+                      <span
+                        className={`flex-1 text-left text-4xl sm:text-[3.25rem] font-mono font-bold tabular-nums tracking-wider leading-none inline-block origin-left ${
+                          clockPaused ? "text-amber-300" : "text-mustard-gold"
+                        } ${
+                          clockMotion === "up"
+                            ? "fp-clock-motion-up"
+                            : clockMotion === "down"
+                              ? "fp-clock-motion-down"
+                              : clockMotion === "set"
+                                ? "fp-clock-motion-set"
+                                : ""
+                        }`}
+                      >
+                        {footballClock}
+                      </span>
+                      <span className="text-[9px] font-mono uppercase tracking-[0.15em] text-white/25 group-hover:text-mustard-gold/70 transition-colors shrink-0 border border-white/10 group-hover:border-mustard-gold/40 rounded-lg px-2 py-1">
+                        Edit
+                      </span>
                     </button>
-                    <span className="text-sm font-mono font-bold text-mustard-gold tabular-nums min-w-[2.5rem] text-center">
-                      +{match.stoppageMinutes || 0}&apos;
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setStoppageMinutes((match.stoppageMinutes || 0) + 1)
-                      }
-                      className="w-8 h-8 rounded-lg bg-white/10 text-white font-bold cursor-pointer hover:bg-white/20"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
 
-                {clockPaused ? (
-                  <span className="text-xs text-amber-300 font-bold flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-amber-400" />
-                    Paused
-                  </span>
-                ) : match.kickoffAt ? (
-                  <span className="text-xs text-red-400 font-bold animate-pulse flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-red-500" />
-                    Live
-                  </span>
-                ) : (
-                  <span className="text-xs text-red-400 font-bold animate-pulse flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-red-500" />
-                    Starting…
-                  </span>
+                    <div className="grid grid-cols-2 sm:grid-cols-[1fr_1fr_1.35fr] gap-2">
+                      {clockPeriod === FOOTBALL_PERIODS.HALF_TIME ? (
+                        <button
+                          type="button"
+                          onClick={() => applyPeriodAction("start_second_half")}
+                          disabled={updatingStatus}
+                          className="text-sm font-bold rounded-xl px-3 py-3 border cursor-pointer disabled:opacity-50 min-h-[48px] transition-colors text-[#0d472c] bg-emerald-400 border-emerald-300 hover:bg-emerald-300 col-span-2 sm:col-span-1"
+                        >
+                          Start 2nd half
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={toggleFootballClockPause}
+                          disabled={updatingStatus || !match.kickoffAt}
+                          className={`text-sm font-bold rounded-xl px-3 py-3 border cursor-pointer disabled:opacity-50 min-h-[48px] transition-colors ${
+                            clockPaused
+                              ? "text-[#0d472c] bg-emerald-400 border-emerald-300 hover:bg-emerald-300"
+                              : "text-mustard-gold border-mustard-gold/55 bg-mustard-gold/5 hover:bg-mustard-gold/15"
+                          }`}
+                        >
+                          {clockPaused ? "Resume" : "Pause"}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={resetFootballClock}
+                        disabled={resettingClock || updatingStatus}
+                        className="text-sm font-bold text-white/85 border border-white/20 rounded-xl px-3 py-3 hover:bg-white/5 hover:border-white/35 cursor-pointer disabled:opacity-50 min-h-[48px] transition-colors"
+                      >
+                        {resettingClock ? "…" : "Reset"}
+                      </button>
+                      <div className="col-span-2 sm:col-span-1 flex items-center justify-between gap-2 bg-[#041f12]/70 border border-white/12 rounded-xl px-2.5 py-1.5 min-h-[48px]">
+                        <span className="text-[9px] font-mono uppercase text-white/40 tracking-[0.18em] px-1 shrink-0">
+                          Extra
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setStoppageMinutes((match.stoppageMinutes || 0) - 1)
+                            }
+                            className="w-9 h-9 rounded-lg bg-[#06371d] border border-white/12 text-white text-lg font-bold cursor-pointer hover:border-mustard-gold/40 hover:bg-white/5 transition-colors"
+                          >
+                            −
+                          </button>
+                          <span
+                            className={`text-base font-mono font-bold text-mustard-gold tabular-nums min-w-[3rem] text-center inline-block ${
+                              extraMotion ? "fp-extra-motion" : ""
+                            }`}
+                          >
+                            +{match.stoppageMinutes || 0}&apos;
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setStoppageMinutes((match.stoppageMinutes || 0) + 1)
+                            }
+                            className="w-9 h-9 rounded-lg bg-[#06371d] border border-white/12 text-white text-lg font-bold cursor-pointer hover:border-mustard-gold/40 hover:bg-white/5 transition-colors"
+                          >
+                            +
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      {clockPeriod === FOOTBALL_PERIODS.FIRST_HALF && (
+                        <button
+                          type="button"
+                          onClick={() => applyPeriodAction("end_first_half")}
+                          disabled={updatingStatus}
+                          className="text-xs font-bold text-mustard-gold border border-mustard-gold/40 rounded-xl px-3 py-2.5 hover:bg-mustard-gold/10 cursor-pointer disabled:opacity-50 min-h-[44px]"
+                        >
+                          End 1st half → HT
+                        </button>
+                      )}
+                      {clockPeriod === FOOTBALL_PERIODS.SECOND_HALF && (
+                        <button
+                          type="button"
+                          onClick={() => applyPeriodAction("end_match")}
+                          disabled={updatingStatus}
+                          className="text-xs font-bold text-mustard-gold border border-mustard-gold/40 rounded-xl px-3 py-2.5 hover:bg-mustard-gold/10 cursor-pointer disabled:opacity-50 min-h-[44px]"
+                        >
+                          Full time
+                        </button>
+                      )}
+                      {clockPeriod === FOOTBALL_PERIODS.HALF_TIME && (
+                        <button
+                          type="button"
+                          onClick={() => applyPeriodAction("end_match")}
+                          disabled={updatingStatus}
+                          className="text-xs font-bold text-white/70 border border-white/20 rounded-xl px-3 py-2.5 hover:bg-white/5 cursor-pointer disabled:opacity-50 min-h-[44px]"
+                        >
+                          End match (FT)
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2 pt-0.5">
+                      {clockPeriod === FOOTBALL_PERIODS.HALF_TIME ? (
+                        <span className="inline-flex items-center gap-2 text-sm font-bold text-amber-300">
+                          <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0" />
+                          Half-time
+                        </span>
+                      ) : clockPaused ? (
+                        <span className="inline-flex items-center gap-2 text-sm font-bold text-amber-300">
+                          <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0" />
+                          Paused · {periodLabel}
+                        </span>
+                      ) : match.kickoffAt ? (
+                        <span className="inline-flex items-center gap-2 text-sm font-bold text-red-400">
+                          <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" />
+                          Live · {periodLabel}
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-2 text-sm font-bold text-red-400">
+                          <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" />
+                          Starting…
+                        </span>
+                      )}
+                      <span className="text-[10px] font-mono text-white/30 tracking-wide">
+                        Tap clock to adjust
+                      </span>
+                    </div>
+                  </>
                 )}
               </div>
             )}
@@ -967,15 +1393,18 @@ export default function MatchScorerPage() {
             {match.status === "COMPLETED" && (
               <span className="text-xs text-mustard-gold/90 font-bold">
                 Match finished
-                {match.kickoffAt
-                  ? ` · ${formatFootballClock(
-                      footballElapsedSeconds(
-                        match.kickoffAt,
-                        clockNow,
-                        footballClockOpts(match)
-                      )
-                    )}`
-                  : ""}
+                {(() => {
+                  const label = completedFootballClockLabel({
+                    fullTimeMinutes: category?.fullTimeMinutes,
+                    extraTimeMinutes: category?.extraTimeMinutes,
+                    stoppageMinutes: match.stoppageMinutes,
+                    tournamentId,
+                    kickoffAt: match.kickoffAt,
+                    clockOpts: footballClockOpts(match),
+                    now: clockNow,
+                  });
+                  return label ? ` · ${label} FT` : "";
+                })()}
               </span>
             )}
           </div>
@@ -1021,10 +1450,12 @@ export default function MatchScorerPage() {
                 <label className="block text-[9px] font-mono text-[#0a331f]/60 uppercase tracking-wider mb-2">
                   What happened
                 </label>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {[
                     { id: "GOAL", label: "⚽ Goal" },
+                    { id: "PENALTY_GOAL", label: "🎯 Pen goal" },
                     { id: "OWN_GOAL", label: "❌ Own goal" },
+                    { id: "PENALTY_MISS", label: "🚫 Pen miss" },
                     { id: "YELLOW_CARD", label: "🟨 Yellow" },
                     { id: "RED_CARD", label: "🟥 Red" },
                   ].map((evt) => (

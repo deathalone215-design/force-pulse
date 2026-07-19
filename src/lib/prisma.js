@@ -4,6 +4,9 @@ import pg from 'pg';
 
 const globalForPrisma = global;
 
+/** Bump when schema fields change so hot reload drops a stale PrismaClient. */
+const PRISMA_CLIENT_REV = 2;
+
 const getPrismaClient = () => {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
@@ -20,9 +23,14 @@ const getPrismaClient = () => {
 };
 
 const g = globalForPrisma;
-if (!g.prisma || g.__prismaUrl !== process.env.DATABASE_URL) {
+if (
+  !g.prisma ||
+  g.__prismaUrl !== process.env.DATABASE_URL ||
+  g.__prismaClientRev !== PRISMA_CLIENT_REV
+) {
   g.prisma = getPrismaClient();
   g.__prismaUrl = process.env.DATABASE_URL;
+  g.__prismaClientRev = PRISMA_CLIENT_REV;
 }
 
 export const prisma = g.prisma;

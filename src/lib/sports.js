@@ -1,4 +1,8 @@
 import { isSetBasedSport as setBasedCheck } from "@/lib/setBasedSports";
+import {
+  parseExtraTimeMinutes,
+  parseFullTimeMinutes,
+} from "@/lib/footballClock";
 
 /** Shared sport helpers for Force Pulse tournaments. */
 
@@ -19,6 +23,10 @@ export function isCricketSport(sport) {
   return normalizeSport(sport) === "CRICKET";
 }
 
+export function isFootballSport(sport) {
+  return normalizeSport(sport) === "FOOTBALL";
+}
+
 export function isSetBasedSport(sport) {
   return setBasedCheck(normalizeSport(sport));
 }
@@ -32,21 +40,27 @@ export function sportLabel(sport) {
   return "Football";
 }
 
-/** Public/admin chip: "OPEN · Football" */
+/** Public/admin chip: "OPEN · Football · 20'+2'" */
 export function categoryDisplayName(category) {
   if (!category) return "";
   const name = category.name || "";
   const sport = sportLabel(category.sport);
-  const overs =
-    isCricketSport(category.sport) && category.oversPerInnings
-      ? ` · ${category.oversPerInnings} ov`
-      : "";
-  return `${name} · ${sport}${overs}`;
+  let detail = "";
+  if (isCricketSport(category.sport) && category.oversPerInnings) {
+    detail = ` · ${category.oversPerInnings} ov`;
+  } else if (isFootballSport(category.sport) && category.fullTimeMinutes) {
+    const extra = parseExtraTimeMinutes(category.extraTimeMinutes);
+    detail =
+      extra > 0
+        ? ` · ${category.fullTimeMinutes}'+${extra}`
+        : ` · ${category.fullTimeMinutes}'`;
+  }
+  return `${name} · ${sport}${detail}`;
 }
 
 /**
  * Normalize API category payloads.
- * Accepts string names or { name, sport, oversPerInnings }.
+ * Accepts string names or { name, sport, oversPerInnings, fullTimeMinutes, extraTimeMinutes }.
  */
 export function parseCategoryInputs(categories, fallbackSport = "FOOTBALL") {
   if (!Array.isArray(categories)) return [];
@@ -58,6 +72,8 @@ export function parseCategoryInputs(categories, fallbackSport = "FOOTBALL") {
     let name;
     let sport = fallback;
     let oversPerInnings = null;
+    let fullTimeMinutes = null;
+    let extraTimeMinutes = null;
 
     if (typeof raw === "string") {
       name = raw.trim();
@@ -67,6 +83,10 @@ export function parseCategoryInputs(categories, fallbackSport = "FOOTBALL") {
       if (isCricketSport(sport) && raw.oversPerInnings != null) {
         const ov = parseInt(raw.oversPerInnings, 10);
         oversPerInnings = Number.isFinite(ov) ? ov : null;
+      }
+      if (isFootballSport(sport)) {
+        fullTimeMinutes = parseFullTimeMinutes(raw.fullTimeMinutes);
+        extraTimeMinutes = parseExtraTimeMinutes(raw.extraTimeMinutes);
       }
     } else {
       continue;
@@ -83,11 +103,29 @@ export function parseCategoryInputs(categories, fallbackSport = "FOOTBALL") {
           `Cricket category "${name}" needs overs per innings between 1 and 50`
         );
       }
+      fullTimeMinutes = null;
+      extraTimeMinutes = null;
+    } else if (isFootballSport(sport)) {
+      oversPerInnings = null;
+      if (fullTimeMinutes == null) {
+        throw new Error(
+          `Football category "${name}" needs full time between 1 and 120 minutes`
+        );
+      }
+      if (extraTimeMinutes === 0) extraTimeMinutes = null;
     } else {
       oversPerInnings = null;
+      fullTimeMinutes = null;
+      extraTimeMinutes = null;
     }
 
-    out.push({ name, sport, oversPerInnings });
+    out.push({
+      name,
+      sport,
+      oversPerInnings,
+      fullTimeMinutes,
+      extraTimeMinutes,
+    });
   }
 
   return out;

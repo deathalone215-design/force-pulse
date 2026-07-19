@@ -55,15 +55,23 @@ function categoryKey(c) {
   return `${(c.sport || "FOOTBALL").toUpperCase()}::${(c.name || "").toLowerCase()}`;
 }
 
-/** Rows: { name, sport, oversPerInnings } — one tournament can mix sports. */
+/** Rows: { name, sport, oversPerInnings, fullTimeMinutes, extraTimeMinutes } */
 function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
   const [draftName, setDraftName] = useState("");
   const [draftSport, setDraftSport] = useState("FOOTBALL");
   const [draftOvers, setDraftOvers] = useState("20");
+  const [draftFullTime, setDraftFullTime] = useState("20");
+  const [draftExtra, setDraftExtra] = useState("0");
 
   const normalize = (name) => name.trim().replace(/\s+/g, " ");
 
-  const addCategory = (rawName, sport = draftSport, overs = draftOvers) => {
+  const addCategory = (
+    rawName,
+    sport = draftSport,
+    overs = draftOvers,
+    fullTime = draftFullTime,
+    extra = draftExtra
+  ) => {
     const name = normalize(rawName);
     if (!name) return;
     const sportId = String(sport || "FOOTBALL").toUpperCase();
@@ -72,6 +80,10 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
       sport: sportId,
       oversPerInnings:
         sportId === "CRICKET" ? parseInt(overs, 10) || 20 : null,
+      fullTimeMinutes:
+        sportId === "FOOTBALL" ? parseInt(fullTime, 10) || 20 : null,
+      extraTimeMinutes:
+        sportId === "FOOTBALL" ? Math.max(0, parseInt(extra, 10) || 0) : null,
     };
     if (selected.some((c) => categoryKey(c) === categoryKey(row))) {
       setDraftName("");
@@ -84,6 +96,24 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
         return;
       }
       row.oversPerInnings = ov;
+      row.fullTimeMinutes = null;
+      row.extraTimeMinutes = null;
+    }
+    if (sportId === "FOOTBALL") {
+      const ft = parseInt(fullTime, 10);
+      if (!ft || ft < 1 || ft > 120) {
+        alert("Football categories need full time between 1 and 120 minutes");
+        return;
+      }
+      const ex = Math.max(0, Math.min(30, parseInt(extra, 10) || 0));
+      row.fullTimeMinutes = ft;
+      row.extraTimeMinutes = ex > 0 ? ex : null;
+      row.oversPerInnings = null;
+    }
+    if (sportId !== "FOOTBALL" && sportId !== "CRICKET") {
+      row.oversPerInnings = null;
+      row.fullTimeMinutes = null;
+      row.extraTimeMinutes = null;
     }
     onChange([...selected, row]);
     setDraftName("");
@@ -122,6 +152,10 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
                     sport,
                     oversPerInnings:
                       sport === "CRICKET" ? cat.oversPerInnings || 20 : null,
+                    fullTimeMinutes:
+                      sport === "FOOTBALL" ? cat.fullTimeMinutes || 20 : null,
+                    extraTimeMinutes:
+                      sport === "FOOTBALL" ? cat.extraTimeMinutes || null : null,
                   });
                 }}
                 className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-[10px] font-mono font-bold uppercase outline-none"
@@ -148,6 +182,41 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
                     className="w-14 bg-white border border-slate-200 rounded-lg px-1.5 py-1 text-[10px] font-mono outline-none"
                   />
                 </label>
+              )}
+              {(cat.sport || "FOOTBALL") === "FOOTBALL" && (
+                <>
+                  <label className="inline-flex items-center gap-1 text-[9px] font-mono text-deep-forest/60">
+                    FT min
+                    <input
+                      type="number"
+                      min={1}
+                      max={120}
+                      value={cat.fullTimeMinutes || 20}
+                      onChange={(e) =>
+                        updateRow(cat, {
+                          fullTimeMinutes: parseInt(e.target.value, 10) || 20,
+                        })
+                      }
+                      className="w-14 bg-white border border-slate-200 rounded-lg px-1.5 py-1 text-[10px] font-mono outline-none"
+                    />
+                  </label>
+                  <label className="inline-flex items-center gap-1 text-[9px] font-mono text-deep-forest/60">
+                    +Extra
+                    <input
+                      type="number"
+                      min={0}
+                      max={30}
+                      value={cat.extraTimeMinutes || 0}
+                      onChange={(e) => {
+                        const n = Math.max(0, parseInt(e.target.value, 10) || 0);
+                        updateRow(cat, {
+                          extraTimeMinutes: n > 0 ? n : null,
+                        });
+                      }}
+                      className="w-12 bg-white border border-slate-200 rounded-lg px-1.5 py-1 text-[10px] font-mono outline-none"
+                    />
+                  </label>
+                </>
               )}
               <button
                 type="button"
@@ -200,6 +269,30 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
               className="w-16 bg-cream-bg/40 border border-slate-200 rounded-xl px-2 py-2 text-sm outline-none"
             />
           )}
+          {draftSport === "FOOTBALL" && (
+            <>
+              <input
+                type="number"
+                min={1}
+                max={120}
+                value={draftFullTime}
+                onChange={(e) => setDraftFullTime(e.target.value)}
+                title="Full time (minutes)"
+                placeholder="FT"
+                className="w-16 bg-cream-bg/40 border border-slate-200 rounded-xl px-2 py-2 text-sm outline-none"
+              />
+              <input
+                type="number"
+                min={0}
+                max={30}
+                value={draftExtra}
+                onChange={(e) => setDraftExtra(e.target.value)}
+                title="Extra minutes (+N')"
+                placeholder="+Extra"
+                className="w-16 bg-cream-bg/40 border border-slate-200 rounded-xl px-2 py-2 text-sm outline-none"
+              />
+            </>
+          )}
           <button
             type="button"
             onClick={() => addCategory(draftName)}
@@ -210,6 +303,11 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
             Add
           </button>
         </div>
+        {draftSport === "FOOTBALL" && (
+          <p className="text-[9px] font-mono text-deep-forest/45">
+            Full time (min) and optional +extra — shown on viewer match cards at FT
+          </p>
+        )}
         <div className="flex flex-wrap gap-1.5">
           <span className="text-[9px] font-mono text-deep-forest/40 uppercase tracking-wider self-center mr-1">
             Quick ({sportLabel(draftSport)}):
@@ -315,6 +413,11 @@ export default function AdminHome() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
+        if (data.error === "Admin auth is not configured") {
+          throw new Error(
+            "Production admin secrets missing. In Vercel → Project → Settings → Environment Variables, set ADMIN_PASSWORD and ADMIN_SECRET (secret ≥ 16 chars), then Redeploy."
+          );
+        }
         throw new Error(data.error || "Invalid password");
       }
       setAuthenticated(true);
@@ -384,6 +487,15 @@ export default function AdminHome() {
           return;
         }
       }
+      if ((c.sport || "FOOTBALL") === "FOOTBALL") {
+        const ft = parseInt(c.fullTimeMinutes, 10);
+        if (!ft || ft < 1 || ft > 120) {
+          alert(
+            `Football category "${c.name}" needs full time between 1 and 120 minutes`
+          );
+          return;
+        }
+      }
     }
 
     try {
@@ -425,6 +537,10 @@ export default function AdminHome() {
         name: c.name,
         sport: c.sport || "FOOTBALL",
         oversPerInnings: c.oversPerInnings ?? null,
+        fullTimeMinutes:
+          c.fullTimeMinutes ??
+          ((c.sport || "FOOTBALL") === "FOOTBALL" ? 20 : null),
+        extraTimeMinutes: c.extraTimeMinutes ?? null,
       }))
     );
     setEditStartDate(toDateInputValue(tournament.startDate));
@@ -481,6 +597,24 @@ export default function AdminHome() {
     if (editCategories.length === 0) {
       alert("Keep at least one category");
       return;
+    }
+    for (const c of editCategories) {
+      if (c.sport === "CRICKET") {
+        const overs = parseInt(c.oversPerInnings, 10);
+        if (!overs || overs < 1 || overs > 50) {
+          alert(`Cricket category "${c.name}" needs overs between 1 and 50`);
+          return;
+        }
+      }
+      if ((c.sport || "FOOTBALL") === "FOOTBALL") {
+        const ft = parseInt(c.fullTimeMinutes, 10);
+        if (!ft || ft < 1 || ft > 120) {
+          alert(
+            `Football category "${c.name}" needs full time between 1 and 120 minutes`
+          );
+          return;
+        }
+      }
     }
 
     try {

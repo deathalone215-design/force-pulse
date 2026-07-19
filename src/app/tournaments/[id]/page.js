@@ -28,9 +28,34 @@ import {
   scheduleFormatLabel,
   suggestedSwissRounds,
 } from "@/lib/scheduleFormats";
+import {
+  formatFootballClock,
+  footballElapsedSeconds,
+  footballClockOpts,
+  completedFootballClockLabel,
+} from "@/lib/footballClock";
 
 const getRoundName = (number, totalRounds, format) =>
   getRoundDisplayName(number, totalRounds, format);
+
+function matchCardClockLabel(match, now = Date.now(), category = null, tournamentId = null) {
+  if (!match) return null;
+  if (match.status === "COMPLETED") {
+    return completedFootballClockLabel({
+      fullTimeMinutes: category?.fullTimeMinutes,
+      extraTimeMinutes: category?.extraTimeMinutes,
+      stoppageMinutes: match.stoppageMinutes,
+      tournamentId,
+      kickoffAt: match.kickoffAt,
+      clockOpts: footballClockOpts(match),
+      now,
+    });
+  }
+  if (!match.kickoffAt) return null;
+  return formatFootballClock(
+    footballElapsedSeconds(match.kickoffAt, now, footballClockOpts(match))
+  );
+}
 
 export default function TournamentDashboard() {
   const { id } = useParams();
@@ -85,6 +110,7 @@ export default function TournamentDashboard() {
   const [pickTeamAId, setPickTeamAId] = useState("");
   const [pickTeamBId, setPickTeamBId] = useState("");
   const [savingPick, setSavingPick] = useState(false);
+  const [boardClockNow, setBoardClockNow] = useState(() => Date.now());
 
   const getActiveCategory = (t = tournament, catId = activeCategoryId) => {
     if (!t?.categories?.length) return null;
@@ -161,6 +187,20 @@ export default function TournamentDashboard() {
     if (cat?.scheduleFormat) {
       setScheduleFormat(normalizeScheduleFormat(cat.scheduleFormat));
     }
+  }, [tournament, activeCategoryId]);
+
+  // Tick match-card clocks while any football match is LIVE
+  useEffect(() => {
+    const cat = getActiveCategory();
+    if (isCricketSport(cat?.sport)) return undefined;
+    const hasLiveClock = (cat?.rounds || []).some((r) =>
+      (r.matches || []).some(
+        (m) => m.status === "LIVE" && m.kickoffAt && !m.clockPausedAt
+      )
+    );
+    if (!hasLiveClock) return undefined;
+    const timer = setInterval(() => setBoardClockNow(Date.now()), 1000);
+    return () => clearInterval(timer);
   }, [tournament, activeCategoryId]);
 
   const fetchTournamentDetails = async ({ silent = false } = {}) => {
@@ -1180,11 +1220,14 @@ export default function TournamentDashboard() {
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
                       {round.matches.map((match) => {
                         const isLive = match.status === "LIVE";
                         const isCompleted = match.status === "COMPLETED";
                         const isScheduled = match.status === "SCHEDULED";
+                        const clockLabel = !isCricket
+                          ? matchCardClockLabel(match, boardClockNow, activeCategory, id)
+                          : null;
                         const needsTeamPick =
                           isScheduled &&
                           (isPlaceholderTeam(match.teamA?.name) ||
@@ -1204,18 +1247,40 @@ export default function TournamentDashboard() {
                             }`}
                           >
                             {/* Card Status bar */}
-                            <div className="flex justify-between items-center mb-6">
-                              <span className={`text-[9px] font-mono font-bold px-2.5 py-1 rounded border tracking-wider ${
-                                isLive 
-                                  ? "bg-red-50 border-red-200 text-red-700 animate-pulse" 
-                                  : isCompleted
-                                  ? "bg-slate-100 border-slate-200 text-slate-500"
-                                  : "bg-slate-50 border-slate-200/60 text-slate-400"
-                              }`}>
-                                {match.status}
-                              </span>
+                            <div className="flex justify-between items-center mb-6 gap-2">
+                              <div className="flex items-center gap-2 flex-wrap min-w-0">
+                                <span className={`text-[9px] font-mono font-bold px-2.5 py-1 rounded border tracking-wider ${
+                                  isLive 
+                                    ? "bg-red-50 border-red-200 text-red-700 animate-pulse" 
+                                    : isCompleted
+                                    ? "bg-slate-100 border-slate-200 text-slate-500"
+                                    : "bg-slate-50 border-slate-200/60 text-slate-400"
+                                }`}>
+                                  {match.status}
+                                </span>
+                                {clockLabel && (
+                                  <span
+                                    className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold tabular-nums px-2 py-1 rounded-lg border ${
+                                      isLive
+                                        ? "bg-[#0d472c] text-mustard-gold border-[#0d472c]"
+                                        : isCompleted
+                                          ? "bg-[#0d472c]/10 text-deep-forest border-mustard-gold/40"
+                                          : "bg-slate-50 text-slate-500 border-slate-200"
+                                    }`}
+                                    title={isCompleted ? "Full time" : "Match clock"}
+                                  >
+                                    <Clock className="w-3 h-3 shrink-0 opacity-70" />
+                                    {clockLabel}
+                                    {isCompleted ? (
+                                      <span className="text-[8px] uppercase tracking-wider opacity-60 font-bold">
+                                        FT
+                                      </span>
+                                    ) : null}
+                                  </span>
+                                )}
+                              </div>
                               {isLive && (
-                                <div className="flex items-center gap-1.5 text-[9px] text-red-650 font-mono font-bold animate-pulse">
+                                <div className="flex items-center gap-1.5 text-[9px] text-red-650 font-mono font-bold animate-pulse shrink-0">
                                   <span className="w-1.5 h-1.5 rounded-full bg-red-600" />
                                   SCORING OPENED
                                 </div>

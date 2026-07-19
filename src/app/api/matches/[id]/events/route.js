@@ -8,6 +8,7 @@ import {
   parseExpectedVersion,
   parseLockToken,
 } from "@/lib/matchCas";
+import { kickoffFromEvent } from "@/lib/footballClock";
 
 export async function POST(request, { params }) {
   try {
@@ -37,6 +38,8 @@ export async function POST(request, { params }) {
     assertWritableLock(match, lockToken);
 
     const t = String(type).toUpperCase();
+    const parsedMinute =
+      minute != null && minute !== "" ? parseInt(minute, 10) : null;
 
     const result = await prisma.$transaction(async (tx) => {
       const event = await tx.matchEvent.create({
@@ -45,7 +48,7 @@ export async function POST(request, { params }) {
           teamId,
           playerId,
           type: t,
-          minute: minute != null && minute !== "" ? parseInt(minute, 10) : null,
+          minute: Number.isFinite(parsedMinute) ? parsedMinute : null,
         },
         include: {
           player: {
@@ -60,9 +63,26 @@ export async function POST(request, { params }) {
       });
       const scores = scoresFromEvents(allEvents, match.teamAId, match.teamBId);
 
+      // Scoring/events without a started clock used to leave kickoff null;
+      // later "Start LIVE" reset the clock to 00:00 while score already existed.
+      const clockPatch = {};
+      if (!match.kickoffAt) {
+        clockPatch.status = "LIVE";
+        clockPatch.kickoffAt = kickoffFromEvent({
+          createdAt: event.createdAt,
+          minute: event.minute,
+        });
+        clockPatch.clockPausedAt = null;
+        clockPatch.pausedSeconds = 0;
+        clockPatch.clockPeriod = "FIRST_HALF";
+      } else if (match.status === "SCHEDULED") {
+        clockPatch.status = "LIVE";
+        if (!match.clockPeriod) clockPatch.clockPeriod = "FIRST_HALF";
+      }
+
       const updatedMatch = await casUpdateMatch(tx, matchId, {
         expectedVersion,
-        data: scores,
+        data: { ...scores, ...clockPatch },
         select: matchMutationSelect,
       });
 

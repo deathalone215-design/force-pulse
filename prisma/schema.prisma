@@ -23,6 +23,8 @@ model TournamentCategory {
   name             String     // e.g. U15, OPEN
   sport            String     @default("FOOTBALL") // FOOTBALL | CRICKET | VOLLEYBALL | BADMINTON | PICKLEBALL
   oversPerInnings  Int?       // Limited overs for cricket categories
+  fullTimeMinutes  Int?       // Football match length (e.g. 20, 40, 90)
+  extraTimeMinutes Int?       // Optional default +extra minutes shown at FT
   scheduleFormat   String     @default("ROUND_ROBIN") // ROUND_ROBIN | LEAGUE | KNOCKOUT | SWISS
   tournamentId     String
   tournament       Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
@@ -76,6 +78,7 @@ model Match {
   clockPausedAt   DateTime?     // When set, match clock is frozen (injury / interruption)
   pausedSeconds   Int           @default(0) // Total completed pause time subtracted from clock
   stoppageMinutes Int           @default(0) // Announced stoppage / added time (+N')
+  clockPeriod     String        @default("FIRST_HALF") // FIRST_HALF | HALF_TIME | SECOND_HALF | FULL_TIME
   penaltyScoreA   Int           @default(0) // Penalty shootout scored (team A)
   penaltyScoreB   Int           @default(0) // Penalty shootout scored (team B)
   createdAt       DateTime      @default(now())

@@ -47,6 +47,8 @@ export async function GET() {
           ...rest,
           sport: normalizeSport(c.sport),
           oversPerInnings: c.oversPerInnings ?? null,
+          fullTimeMinutes: c.fullTimeMinutes ?? null,
+          extraTimeMinutes: c.extraTimeMinutes ?? null,
           _count: { teams: clubCount },
         };
       });
@@ -104,6 +106,8 @@ export async function POST(request) {
             name: c.name,
             sport: c.sport,
             oversPerInnings: c.oversPerInnings,
+            fullTimeMinutes: c.fullTimeMinutes,
+            extraTimeMinutes: c.extraTimeMinutes,
           })),
         },
       },
