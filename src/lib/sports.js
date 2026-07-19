@@ -31,6 +31,32 @@ export function isSetBasedSport(sport) {
   return setBasedCheck(normalizeSport(sport));
 }
 
+/** Badminton / pickleball Singles — register as a player, not a club. */
+export function isSinglesCategory(category) {
+  if (!category || !isSetBasedSport(category.sport)) return false;
+  return /singles/i.test(String(category.name || ""));
+}
+
+/** Badminton / pickleball Doubles or Mixed pairs. */
+export function isDoublesOrMixedCategory(category) {
+  if (!category || !isSetBasedSport(category.sport)) return false;
+  const n = String(category.name || "");
+  return /doubles|mixed/i.test(n);
+}
+
+/** UI copy: Player | Pair | Club */
+export function entryLabel(category) {
+  if (isSinglesCategory(category)) return "Player";
+  if (isDoublesOrMixedCategory(category)) return "Pair";
+  return "Club";
+}
+
+export function entryLabelPlural(category) {
+  if (isSinglesCategory(category)) return "Players";
+  if (isDoublesOrMixedCategory(category)) return "Pairs";
+  return "Clubs";
+}
+
 export function sportLabel(sport) {
   const s = normalizeSport(sport);
   if (s === "CRICKET") return "Cricket";

@@ -16,7 +16,7 @@ import {
   calculateCricketStandings,
 } from "@/lib/cricket";
 import { uploadImageToSupabase } from "@/lib/imageUpload";
-import { categoryDisplayName, isCricketSport } from "@/lib/sports";
+import { categoryDisplayName, isCricketSport, isSinglesCategory, isDoublesOrMixedCategory, entryLabel, entryLabelPlural } from "@/lib/sports";
 import { isPlaceholderTeam, buildFootballStandings } from "@/lib/tournamentResolver";
 import {
   SCHEDULE_FORMATS,
@@ -143,11 +143,17 @@ export default function TournamentDashboard() {
 
   const handleSavePickedTeams = async (matchId) => {
     if (!pickTeamAId || !pickTeamBId) {
-      alert("Pick both clubs for this match");
+      alert(
+        isSinglesCategory(getActiveCategory())
+          ? "Pick both players for this match"
+          : isDoublesOrMixedCategory(getActiveCategory())
+            ? "Pick both pairs for this match"
+            : "Pick both clubs for this match"
+      );
       return;
     }
     if (pickTeamAId === pickTeamBId) {
-      alert("A team cannot play against itself");
+      alert("Cannot play against the same entry");
       return;
     }
 
@@ -238,6 +244,26 @@ export default function TournamentDashboard() {
     });
   };
 
+  // Keep register form rows aligned with category type (player / pair / club)
+  useEffect(() => {
+    const cat = getActiveCategory();
+    if (isSinglesCategory(cat)) {
+      setNewPlayers([]);
+    } else if (isDoublesOrMixedCategory(cat)) {
+      setNewPlayers([
+        { name: "", shirtNumber: "1", logoUrl: null },
+        { name: "", shirtNumber: "2", logoUrl: null },
+      ]);
+    } else {
+      setNewPlayers([{ name: "", shirtNumber: "", logoUrl: null }]);
+    }
+    setNewTeamName("");
+    setNewTeamLogoUrl(null);
+    if (teamLogoInputRef.current) teamLogoInputRef.current.value = "";
+    closeTeamEditor();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCategoryId]);
+
   // Add Player Row to Team Form
   const addPlayerRow = () => {
     setNewPlayers([...newPlayers, { name: "", shirtNumber: "", logoUrl: null }]);
@@ -258,48 +284,99 @@ export default function TournamentDashboard() {
   // Add Team Submission
   const handleAddTeam = async (e) => {
     e.preventDefault();
+    const cat = getActiveCategory();
+    const label = entryLabel(cat).toLowerCase();
     if (!newTeamName.trim()) {
-      alert("Enter a club / team name");
+      alert(
+        isSinglesCategory(cat)
+          ? "Enter a player name"
+          : isDoublesOrMixedCategory(cat)
+            ? "Enter a pair name (e.g. Alex / Jordan)"
+            : "Enter a club / team name"
+      );
       return;
     }
     if (!activeCategoryId) {
-      alert("Select a category (e.g. OPEN or U15) first");
+      alert("Select a category first");
       return;
     }
 
     try {
       setAddingTeam(true);
-      const squad = newPlayers.filter((p) => p.name.trim() !== "");
+      const trimmedName = newTeamName.trim();
+      let squad;
+      let logoUrl = newTeamLogoUrl || null;
+
+      if (isSinglesCategory(cat)) {
+        squad = [
+          {
+            name: trimmedName,
+            shirtNumber: 1,
+            logoUrl,
+          },
+        ];
+      } else if (isDoublesOrMixedCategory(cat)) {
+        squad = newPlayers
+          .filter((p) => p.name.trim() !== "")
+          .map((p, i) => ({
+            name: p.name.trim(),
+            shirtNumber: p.shirtNumber || i + 1,
+            logoUrl: p.logoUrl || null,
+          }));
+        if (squad.length !== 2) {
+          alert("Doubles / Mixed needs exactly 2 players");
+          setAddingTeam(false);
+          return;
+        }
+      } else {
+        squad = newPlayers
+          .filter((p) => p.name.trim() !== "")
+          .map((p) => ({
+            name: p.name.trim(),
+            shirtNumber: p.shirtNumber,
+            logoUrl: p.logoUrl || null,
+          }));
+      }
+
       const res = await fetch(`/api/tournaments/${id}/teams`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
-          name: newTeamName.trim(),
-          logoUrl: newTeamLogoUrl || null,
-          players: squad.map((p) => ({
-            name: p.name.trim(),
-            shirtNumber: p.shirtNumber,
-            logoUrl: p.logoUrl || null,
-          })),
+          name: trimmedName,
+          logoUrl,
+          players: squad,
           categoryId: activeCategoryId,
         }),
       });
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to register club");
+        throw new Error(data.error || `Failed to register ${label}`);
       }
 
       setNewTeamName("");
       setNewTeamLogoUrl(null);
       if (teamLogoInputRef.current) teamLogoInputRef.current.value = "";
-      setNewPlayers([{ name: "", shirtNumber: "", logoUrl: null }]);
+      if (isDoublesOrMixedCategory(cat)) {
+        setNewPlayers([
+          { name: "", shirtNumber: "1", logoUrl: null },
+          { name: "", shirtNumber: "2", logoUrl: null },
+        ]);
+      } else if (!isSinglesCategory(cat)) {
+        setNewPlayers([{ name: "", shirtNumber: "", logoUrl: null }]);
+      } else {
+        setNewPlayers([]);
+      }
       await fetchTournamentDetails({ silent: true });
       alert(
-        squad.length
-          ? `Club registered with ${squad.length} player${squad.length === 1 ? "" : "s"}.`
-          : "Club registered. You can add players anytime via Edit."
+        isSinglesCategory(cat)
+          ? "Player registered."
+          : isDoublesOrMixedCategory(cat)
+            ? "Pair registered."
+            : squad.length
+              ? `Club registered with ${squad.length} player${squad.length === 1 ? "" : "s"}.`
+              : "Club registered. You can add players anytime via Edit."
       );
     } catch (err) {
       alert(err.message);
@@ -308,11 +385,45 @@ export default function TournamentDashboard() {
     }
   };
 
+  /** Keep the linked Player row in sync for Singles entries. */
+  const syncSinglesLinkedPlayer = async (team, { name, logoUrl } = {}) => {
+    if (!isSinglesCategory(getActiveCategory())) return;
+    const player = team?.players?.[0];
+    if (!player) {
+      if (!name && !team?.name) return;
+      await fetch(`/api/tournaments/${id}/teams/${team.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: name || team.name,
+          shirtNumber: 1,
+          logoUrl: logoUrl !== undefined ? logoUrl : team.logoUrl || null,
+        }),
+      });
+      return;
+    }
+    const body = {};
+    if (name !== undefined) body.name = name;
+    if (logoUrl !== undefined) body.logoUrl = logoUrl;
+    if (Object.keys(body).length === 0) return;
+    await fetch(
+      `/api/tournaments/${id}/teams/${team.id}/players/${player.id}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(body),
+      }
+    );
+  };
+
   const handleTeamLogoChange = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      setNewTeamLogoUrl(await processImageFile(file, "clubs"));
+      const folder = isSinglesCategory(getActiveCategory()) ? "players" : "clubs";
+      setNewTeamLogoUrl(await processImageFile(file, folder));
     } catch (err) {
       alert(err.message);
       e.target.value = "";
@@ -363,7 +474,8 @@ export default function TournamentDashboard() {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      setEditTeamLogoUrl(await processImageFile(file, "clubs"));
+      const folder = isSinglesCategory(getActiveCategory()) ? "players" : "clubs";
+      setEditTeamLogoUrl(await processImageFile(file, folder));
     } catch (err) {
       alert(err.message);
       e.target.value = "";
@@ -486,10 +598,10 @@ export default function TournamentDashboard() {
     }
   };
 
-  const handleSaveTeamLogo = async (teamId) => {
+  const handleSaveTeamLogo = async (team) => {
     try {
       setSavingTeamEdit(true);
-      const res = await fetch(`/api/tournaments/${id}/teams/${teamId}`, {
+      const res = await fetch(`/api/tournaments/${id}/teams/${team.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -497,10 +609,15 @@ export default function TournamentDashboard() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to update logo");
+        throw new Error(data.error || "Failed to update photo");
       }
+      await syncSinglesLinkedPlayer(team, { logoUrl: editTeamLogoUrl });
       await fetchTournamentDetails({ silent: true });
-      alert("Club logo updated — it will show on the public live board.");
+      alert(
+        isSinglesCategory(getActiveCategory())
+          ? "Player photo updated."
+          : "Club logo updated — it will show on the public live board."
+      );
     } catch (err) {
       alert(err.message);
     } finally {
@@ -508,15 +625,22 @@ export default function TournamentDashboard() {
     }
   };
 
-  const handleSaveTeamName = async (teamId) => {
+  const handleSaveTeamName = async (team) => {
     const trimmed = editTeamName.trim();
+    const cat = getActiveCategory();
     if (!trimmed) {
-      alert("Enter a club / team name");
+      alert(
+        isSinglesCategory(cat)
+          ? "Enter a player name"
+          : isDoublesOrMixedCategory(cat)
+            ? "Enter a pair name"
+            : "Enter a club / team name"
+      );
       return;
     }
     try {
       setSavingTeamEdit(true);
-      const res = await fetch(`/api/tournaments/${id}/teams/${teamId}`, {
+      const res = await fetch(`/api/tournaments/${id}/teams/${team.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -524,10 +648,17 @@ export default function TournamentDashboard() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to update team name");
+        throw new Error(data.error || "Failed to update name");
       }
+      await syncSinglesLinkedPlayer(team, { name: trimmed });
       await fetchTournamentDetails({ silent: true });
-      alert("Club name updated.");
+      alert(
+        isSinglesCategory(cat)
+          ? "Player name updated."
+          : isDoublesOrMixedCategory(cat)
+            ? "Pair name updated."
+            : "Club name updated."
+      );
     } catch (err) {
       alert(err.message);
     } finally {
@@ -536,8 +667,12 @@ export default function TournamentDashboard() {
   };
 
   const handleDeleteTeam = async (team) => {
+    const cat = getActiveCategory();
+    const label = entryLabel(cat).toLowerCase();
     const ok = window.confirm(
-      `Delete "${team.name}"?\n\nThis removes the club, its players, and any matches that include this team. This cannot be undone.`
+      `Delete "${team.name}"?\n\nThis removes the ${label}${
+        isSinglesCategory(cat) ? "" : ", its players,"
+      } and any matches that include this entry. This cannot be undone.`
     );
     if (!ok) return;
 
@@ -549,7 +684,7 @@ export default function TournamentDashboard() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Failed to delete team");
+        throw new Error(data.error || `Failed to delete ${label}`);
       }
       closeTeamEditor();
       await fetchTournamentDetails({ silent: true });
@@ -979,6 +1114,10 @@ export default function TournamentDashboard() {
   const categoryTeams = activeCategory?.teams || [];
   const categoryRounds = activeCategory?.rounds || [];
   const isCricket = isCricketSport(activeCategory?.sport);
+  const isSingles = isSinglesCategory(activeCategory);
+  const isPairEntry = isDoublesOrMixedCategory(activeCategory);
+  const entriesLabel = entryLabelPlural(activeCategory);
+  const oneEntryLabel = entryLabel(activeCategory);
   const footballStandings = calculateStandings();
   const cricketStandings = calculateCricketStandings(activeCategory).filter(
     (t) => !isPlaceholderTeam(t.name)
@@ -1310,7 +1449,7 @@ export default function TournamentDashboard() {
                             {isPicking && (
                               <div className="mb-4 space-y-3 border border-dashed border-mustard-gold/70 rounded-xl bg-cream-bg/60 p-3">
                                 <p className="text-[9px] font-mono font-bold uppercase tracking-wider text-deep-forest/60">
-                                  Pick clubs ({realClubs.length} available)
+                                  Pick {entriesLabel.toLowerCase()} ({realClubs.length} available)
                                 </p>
                                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                                   <select
@@ -1318,7 +1457,13 @@ export default function TournamentDashboard() {
                                     onChange={(e) => setPickTeamAId(e.target.value)}
                                     className="flex-1 bg-white border border-slate-200 focus:border-mustard-gold rounded-xl px-3 py-2 text-xs text-deep-forest outline-none cursor-pointer"
                                   >
-                                    <option value="">-- Home club --</option>
+                                    <option value="">
+                                      {isSingles
+                                        ? "-- Player A --"
+                                        : isPairEntry
+                                          ? "-- Pair A --"
+                                          : "-- Home club --"}
+                                    </option>
                                     {realClubs.map((t) => (
                                       <option key={t.id} value={t.id} disabled={t.id === pickTeamBId}>
                                         {t.name}
@@ -1331,7 +1476,13 @@ export default function TournamentDashboard() {
                                     onChange={(e) => setPickTeamBId(e.target.value)}
                                     className="flex-1 bg-white border border-slate-200 focus:border-mustard-gold rounded-xl px-3 py-2 text-xs text-deep-forest outline-none cursor-pointer"
                                   >
-                                    <option value="">-- Away club --</option>
+                                    <option value="">
+                                      {isSingles
+                                        ? "-- Player B --"
+                                        : isPairEntry
+                                          ? "-- Pair B --"
+                                          : "-- Away club --"}
+                                    </option>
                                     {realClubs.map((t) => (
                                       <option key={t.id} value={t.id} disabled={t.id === pickTeamAId}>
                                         {t.name}
@@ -1401,20 +1552,37 @@ export default function TournamentDashboard() {
               <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl p-6 shadow-sm relative overflow-hidden">
                 <div className="flex items-center gap-2 mb-2 border-b border-slate-100 pb-3">
                   <Users className="w-5 h-5 text-mustard-gold" />
-                  <h3 className="text-sm font-bold text-deep-forest uppercase tracking-wider font-mono">Register Club</h3>
+                  <h3 className="text-sm font-bold text-deep-forest uppercase tracking-wider font-mono">
+                    {isSingles ? "Register Player" : isPairEntry ? "Register Pair" : "Register Club"}
+                  </h3>
                 </div>
                 <p className="text-[10px] font-mono text-deep-forest/50 mb-6 leading-relaxed">
-                  Add club name, optional logo, then players with jersey numbers and photos.
-                  Category: <span className="font-bold text-deep-forest">{activeCategory ? categoryDisplayName(activeCategory) : "—"}</span>
+                  {isSingles
+                    ? "Add player name and optional photo only — no team roster."
+                    : isPairEntry
+                      ? "Add a pair display name, then both players with optional photos."
+                      : "Add club name, optional logo, then players with jersey numbers and photos."}{" "}
+                  Category:{" "}
+                  <span className="font-bold text-deep-forest">
+                    {activeCategory ? categoryDisplayName(activeCategory) : "—"}
+                  </span>
                 </p>
 
                 <form onSubmit={handleAddTeam} className="space-y-6">
                   <div>
-                    <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold">Club / Team Name</label>
+                    <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold">
+                      {isSingles ? "Player Name" : isPairEntry ? "Pair Name" : "Club / Team Name"}
+                    </label>
                     <input
                       type="text"
                       required
-                      placeholder="e.g. Spring Leaf United"
+                      placeholder={
+                        isSingles
+                          ? "e.g. Andre Silva"
+                          : isPairEntry
+                            ? "e.g. Mike Torres / Dan Foster"
+                            : "e.g. Spring Leaf United"
+                      }
                       value={newTeamName}
                       onChange={(e) => setNewTeamName(e.target.value)}
                       className="w-full bg-[#FAF6EE]/50 border border-slate-200 focus:bg-white focus:border-mustard-gold focus:ring-1 focus:ring-mustard-gold rounded-xl px-4 py-2.5 text-sm text-deep-forest placeholder-slate-400 outline-none transition-all shadow-inner"
@@ -1423,18 +1591,22 @@ export default function TournamentDashboard() {
 
                   <div>
                     <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold">
-                      Upload Club Logo
+                      {isSingles ? "Player Photo" : isPairEntry ? "Pair Photo (optional)" : "Upload Club Logo"}
                     </label>
                     <div className="flex items-center gap-3">
                       {newTeamLogoUrl ? (
                         <img
                           src={newTeamLogoUrl}
-                          alt="Club logo preview"
+                          alt="Preview"
                           className="w-14 h-14 rounded-full object-cover border-2 border-mustard-gold shadow-sm"
                         />
                       ) : (
                         <div className="w-14 h-14 rounded-full bg-cream-bg border border-dashed border-slate-300 flex items-center justify-center">
-                          <Trophy className="w-5 h-5 text-slate-300" />
+                          {isSingles ? (
+                            <ImagePlus className="w-5 h-5 text-slate-300" />
+                          ) : (
+                            <Trophy className="w-5 h-5 text-slate-300" />
+                          )}
                         </div>
                       )}
                       <div className="flex-1 space-y-2">
@@ -1454,28 +1626,33 @@ export default function TournamentDashboard() {
                             }}
                             className="text-[9px] font-mono font-bold uppercase text-red-600 cursor-pointer"
                           >
-                            Remove logo
+                            {isSingles ? "Remove photo" : "Remove logo"}
                           </button>
                         )}
                       </div>
                     </div>
                   </div>
 
+                  {!isSingles && (
                   <div className="space-y-4">
                     <div className="flex items-center justify-between border-b border-slate-200 pb-2">
                       <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest font-bold">
-                        Add Players
+                        {isPairEntry ? "Pair Players (2)" : "Add Players"}
                       </label>
-                      <button
-                        type="button"
-                        onClick={addPlayerRow}
-                        className="text-mustard-gold hover:text-mustard-gold-hover text-[10px] font-mono font-bold flex items-center gap-1 cursor-pointer"
-                      >
-                        <PlusCircle className="w-3.5 h-3.5" /> Add Player
-                      </button>
+                      {!isPairEntry && (
+                        <button
+                          type="button"
+                          onClick={addPlayerRow}
+                          className="text-mustard-gold hover:text-mustard-gold-hover text-[10px] font-mono font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <PlusCircle className="w-3.5 h-3.5" /> Add Player
+                        </button>
+                      )}
                     </div>
                     <p className="text-[9px] font-mono text-deep-forest/45">
-                      Tap the circle for a player photo · enter name & jersey #
+                      {isPairEntry
+                        ? "Enter both partners · tap the circle for a photo"
+                        : "Tap the circle for a player photo · enter name & jersey #"}
                     </p>
 
                     <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
@@ -1503,19 +1680,21 @@ export default function TournamentDashboard() {
                             </label>
                             <input
                               type="text"
-                              placeholder="Player Name"
+                              placeholder={isPairEntry ? `Player ${idx + 1}` : "Player Name"}
                               value={player.name}
                               onChange={(e) => updatePlayerField(idx, "name", e.target.value)}
                               className="flex-1 bg-white/70 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-3 py-2 text-xs text-deep-forest outline-none transition-all"
                             />
-                            <input
-                              type="number"
-                              placeholder="Jersey"
-                              value={player.shirtNumber}
-                              onChange={(e) => updatePlayerField(idx, "shirtNumber", e.target.value)}
-                              className="w-20 bg-white/70 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-2 py-2 text-xs text-center text-deep-forest outline-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                            />
-                            {newPlayers.length > 1 && (
+                            {!isPairEntry && (
+                              <input
+                                type="number"
+                                placeholder="Jersey"
+                                value={player.shirtNumber}
+                                onChange={(e) => updatePlayerField(idx, "shirtNumber", e.target.value)}
+                                className="w-20 bg-white/70 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-2 py-2 text-xs text-center text-deep-forest outline-none transition-all [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                              />
+                            )}
+                            {!isPairEntry && newPlayers.length > 1 && (
                               <button
                                 type="button"
                                 onClick={() => removePlayerRow(idx)}
@@ -1538,6 +1717,7 @@ export default function TournamentDashboard() {
                       ))}
                     </div>
                   </div>
+                  )}
 
                   <button
                     type="submit"
@@ -1547,12 +1727,16 @@ export default function TournamentDashboard() {
                     {addingTeam ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
-                        Saving Squad...
+                        Saving…
                       </>
                     ) : (
                       <>
                         <Plus className="w-4 h-4 stroke-[3px]" />
-                        Confirm Registration
+                        {isSingles
+                          ? "Register Player"
+                          : isPairEntry
+                            ? "Register Pair"
+                            : "Confirm Registration"}
                       </>
                     )}
                   </button>
@@ -1563,16 +1747,24 @@ export default function TournamentDashboard() {
             {/* Teams Directory List */}
             <div className="lg:col-span-2 space-y-6">
               <div className="flex justify-between items-center">
-                <h3 className="text-xs font-bold text-deep-forest/60 uppercase tracking-widest font-mono">Registered Clubs</h3>
+                <h3 className="text-xs font-bold text-deep-forest/60 uppercase tracking-widest font-mono">
+                  Registered {entriesLabel}
+                </h3>
                 <span className="text-[10px] font-mono text-deep-forest bg-white border border-dashed border-mustard-gold rounded px-2.5 py-0.5 font-bold shadow-sm">
-                  Total Clubs: {categoryTeams.filter(t => !isPlaceholderTeam(t.name)).length}
+                  Total {entriesLabel}: {categoryTeams.filter(t => !isPlaceholderTeam(t.name)).length}
                 </span>
               </div>
 
               {categoryTeams.filter(t => !isPlaceholderTeam(t.name)).length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 bg-white border-2 border-dashed border-mustard-gold rounded-2xl text-neutral-400 gap-2 shadow-sm">
                   <Users className="w-10 h-10 text-slate-300" />
-                  <span className="text-xs font-mono">No Clubs Drafted Yet</span>
+                  <span className="text-xs font-mono">
+                    {isSingles
+                      ? "No players yet"
+                      : isPairEntry
+                        ? "No pairs yet"
+                        : "No Clubs Drafted Yet"}
+                  </span>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1605,7 +1797,17 @@ export default function TournamentDashboard() {
                           )}
                           <div className="min-w-0">
                             <h4 className="font-bold text-deep-forest uppercase text-sm tracking-wide truncate">{team.name}</h4>
-                            <span className="text-[9px] font-mono text-deep-forest/60 uppercase font-bold">{team.players?.length || 0} Registered Members</span>
+                            {!isSingles && (
+                              <span className="text-[9px] font-mono text-deep-forest/60 uppercase font-bold">
+                                {team.players?.length || 0}{" "}
+                                {isPairEntry ? "Players" : "Registered Members"}
+                              </span>
+                            )}
+                            {isSingles && (
+                              <span className="text-[9px] font-mono text-deep-forest/60 uppercase font-bold">
+                                Singles player
+                              </span>
+                            )}
                           </div>
                         </div>
                         <button
@@ -1631,17 +1833,27 @@ export default function TournamentDashboard() {
 
                       {isEditing && (
                         <div className="space-y-4 mb-4 pb-4 border-b border-dashed border-mustard-gold/40">
-                          {/* Edit club name */}
+                          {/* Edit name */}
                           <div>
                             <p className="text-[9px] font-mono font-bold uppercase tracking-widest text-deep-forest/55 mb-2">
-                              Club / team name
+                              {isSingles
+                                ? "Player name"
+                                : isPairEntry
+                                  ? "Pair name"
+                                  : "Club / team name"}
                             </p>
                             <div className="flex flex-col sm:flex-row gap-2">
                               <input
                                 type="text"
                                 value={editTeamName}
                                 onChange={(e) => setEditTeamName(e.target.value)}
-                                placeholder="Club name"
+                                placeholder={
+                                  isSingles
+                                    ? "Player name"
+                                    : isPairEntry
+                                      ? "Pair name"
+                                      : "Club name"
+                                }
                                 className="flex-1 bg-[#FAF6EE]/50 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-3 py-2.5 text-xs outline-none"
                               />
                               <button
@@ -1651,7 +1863,7 @@ export default function TournamentDashboard() {
                                   editTeamName.trim() === "" ||
                                   editTeamName.trim() === team.name
                                 }
-                                onClick={() => handleSaveTeamName(team.id)}
+                                onClick={() => handleSaveTeamName(team)}
                                 className="px-3 py-2.5 bg-[#0d472c] text-white rounded-xl text-[9px] font-mono font-bold uppercase cursor-pointer disabled:opacity-40 min-h-[40px]"
                               >
                                 Save name
@@ -1662,7 +1874,7 @@ export default function TournamentDashboard() {
                           {/* Upload / change photo */}
                           <div>
                             <p className="text-[9px] font-mono font-bold uppercase tracking-widest text-deep-forest/55 mb-2">
-                              Club photo / logo
+                              {isSingles ? "Player photo" : isPairEntry ? "Pair photo" : "Club photo / logo"}
                             </p>
                             <div className="flex items-center gap-3">
                               {editTeamLogoUrl ? (
@@ -1688,7 +1900,7 @@ export default function TournamentDashboard() {
                                   <button
                                     type="button"
                                     disabled={savingTeamEdit || editTeamLogoUrl === (team.logoUrl || null)}
-                                    onClick={() => handleSaveTeamLogo(team.id)}
+                                    onClick={() => handleSaveTeamLogo(team)}
                                     className="px-3 py-2 bg-[#0d472c] text-white rounded-xl text-[9px] font-mono font-bold uppercase cursor-pointer disabled:opacity-40 min-h-[36px]"
                                   >
                                     {savingTeamEdit ? "Saving…" : "Save photo"}
@@ -1712,7 +1924,8 @@ export default function TournamentDashboard() {
                             </div>
                           </div>
 
-                          {/* Add player */}
+                          {/* Add player — not for singles */}
+                          {!isSingles && (
                           <div>
                             <p className="text-[9px] font-mono font-bold uppercase tracking-widest text-deep-forest/55 mb-2">
                               Add player
@@ -1781,8 +1994,9 @@ export default function TournamentDashboard() {
                               </div>
                             </div>
                           </div>
+                          )}
 
-                          {/* Delete club */}
+                          {/* Delete */}
                           <div className="pt-2 border-t border-dashed border-red-200">
                             <p className="text-[9px] font-mono font-bold uppercase tracking-widest text-red-600/70 mb-2">
                               Danger zone
@@ -1794,15 +2008,20 @@ export default function TournamentDashboard() {
                               className="inline-flex items-center gap-1.5 px-3 py-2.5 bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 rounded-xl text-[9px] font-mono font-bold uppercase cursor-pointer disabled:opacity-50 min-h-[40px]"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
-                              Delete club
+                              Delete {oneEntryLabel.toLowerCase()}
                             </button>
                             <p className="mt-1.5 text-[10px] font-mono text-deep-forest/45 leading-snug">
-                              Removes this club, its players, and any matches that include it.
+                              {isSingles
+                                ? "Removes this player and any matches that include them."
+                                : isPairEntry
+                                  ? "Removes this pair, its players, and any matches that include it."
+                                  : "Removes this club, its players, and any matches that include it."}
                             </p>
                           </div>
                         </div>
                       )}
 
+                      {!isSingles && (
                       <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1">
                         {team.players && team.players.length > 0 ? (
                           team.players.map((p) => {
@@ -1923,6 +2142,7 @@ export default function TournamentDashboard() {
                           </div>
                         )}
                       </div>
+                      )}
                     </div>
                     );
                   })}
@@ -2165,7 +2385,13 @@ export default function TournamentDashboard() {
                                 onChange={(e) => updateManualMatchField(rIndex, mIndex, "teamAId", e.target.value)}
                                 className="w-full sm:flex-1 bg-white border border-slate-200 hover:border-slate-350 focus:border-mustard-gold rounded-xl px-3 py-2 text-xs text-deep-forest outline-none transition-all cursor-pointer shadow-sm"
                               >
-                                <option value="">-- Choose Home Club --</option>
+                                <option value="">
+                                  {isSingles
+                                    ? "-- Choose player --"
+                                    : isPairEntry
+                                      ? "-- Choose pair --"
+                                      : "-- Choose Home Club --"}
+                                </option>
                                 {categoryTeams
                                   .filter((t) => !isPlaceholderTeam(t.name))
                                   .map((t) => (
@@ -2182,7 +2408,13 @@ export default function TournamentDashboard() {
                                 onChange={(e) => updateManualMatchField(rIndex, mIndex, "teamBId", e.target.value)}
                                 className="w-full sm:flex-1 bg-white border border-slate-200 hover:border-slate-350 focus:border-mustard-gold rounded-xl px-3 py-2 text-xs text-deep-forest outline-none transition-all cursor-pointer shadow-sm"
                               >
-                                <option value="">-- Choose Away Club --</option>
+                                <option value="">
+                                  {isSingles
+                                    ? "-- Choose player --"
+                                    : isPairEntry
+                                      ? "-- Choose pair --"
+                                      : "-- Choose Away Club --"}
+                                </option>
                                 {categoryTeams
                                   .filter((t) => !isPlaceholderTeam(t.name))
                                   .map((t) => (
