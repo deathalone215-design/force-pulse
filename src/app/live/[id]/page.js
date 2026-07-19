@@ -908,7 +908,10 @@ function FootballLiveCard({ match, tournamentId = null, category = null }) {
           </p>
           <div className="space-y-1">
             {goals.map((e) => {
-              const isA = e.teamId === match.teamAId;
+              const isA =
+                e.teamId === match.teamAId ||
+                e.teamId === match.resolvedTeamAId ||
+                e.teamId === match.teamA?.id;
               const name = e.player?.name || "Unknown";
               const t = String(e.type || "").toUpperCase();
               const tag = t === "OWN_GOAL" ? " (OG)" : "";

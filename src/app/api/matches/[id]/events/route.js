@@ -19,7 +19,7 @@ export async function POST(request, { params }) {
       return await deleteMatchEvent(matchId, body);
     }
 
-    const { type, teamId, playerId, minute } = body;
+    const { type, teamId, playerId, minute, side } = body;
     const expectedVersion = parseExpectedVersion(body);
     const lockToken = parseLockToken(body);
 
@@ -37,6 +37,31 @@ export async function POST(request, { params }) {
 
     assertWritableLock(match, lockToken);
 
+    // Always attribute to a match slot (teamA/teamB). Resolved club ids from
+    // knockout TBD display must not be stored — they break score math.
+    const sideKey = String(side || "").toUpperCase();
+    let eventTeamId = teamId;
+    if (sideKey === "A" || sideKey === "HOME") {
+      eventTeamId = match.teamAId;
+    } else if (sideKey === "B" || sideKey === "AWAY") {
+      eventTeamId = match.teamBId;
+    } else if (teamId === match.teamAId || teamId === match.teamBId) {
+      eventTeamId = teamId;
+    } else {
+      // Resolved club id from old clients — reject; client must send side
+      eventTeamId = null;
+    }
+
+    if (!eventTeamId) {
+      return NextResponse.json(
+        {
+          error:
+            "Event team must be home or away for this match. Re-select the team and try again.",
+        },
+        { status: 400 }
+      );
+    }
+
     const t = String(type).toUpperCase();
     const parsedMinute =
       minute != null && minute !== "" ? parseInt(minute, 10) : null;
@@ -45,7 +70,7 @@ export async function POST(request, { params }) {
       const event = await tx.matchEvent.create({
         data: {
           matchId,
-          teamId,
+          teamId: eventTeamId,
           playerId,
           type: t,
           minute: Number.isFinite(parsedMinute) ? parsedMinute : null,

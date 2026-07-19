@@ -155,12 +155,17 @@ export function resolveTournamentPlaceholders(category) {
   const applyMapping = () => {
     category.rounds.forEach((round) => {
       round.matches.forEach((match) => {
+        // Keep DB slot IDs (placeholder FKs) for scoring — never replace with resolved club ids.
+        const slotAId = match.teamAId;
+        const slotBId = match.teamBId;
         const resolvedA = getResolvedTeam(match.teamA);
         const resolvedB = getResolvedTeam(match.teamB);
-        match.teamA = resolvedA;
-        match.teamB = resolvedB;
-        if (resolvedA?.id) match.teamAId = resolvedA.id;
-        if (resolvedB?.id) match.teamBId = resolvedB.id;
+        match.teamA = resolvedA || match.teamA;
+        match.teamB = resolvedB || match.teamB;
+        match.teamAId = slotAId;
+        match.teamBId = slotBId;
+        match.resolvedTeamAId = resolvedA?.id || slotAId;
+        match.resolvedTeamBId = resolvedB?.id || slotBId;
       });
     });
   };

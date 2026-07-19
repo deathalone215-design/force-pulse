@@ -756,15 +756,28 @@ export default function MatchScorerPage() {
         setSubmittingEvent(true);
 
         let eventTeamId = null;
+        let side = null;
         const teamA = match.teamA;
         const teamB = match.teamB;
 
-        if (teamA?.players?.some((p) => p.id === eventPlayerId)) {
-          eventTeamId = teamA.id;
+        if (selectedEventTeamId === match.teamAId) {
+          eventTeamId = match.teamAId;
+          side = "A";
+        } else if (selectedEventTeamId === match.teamBId) {
+          eventTeamId = match.teamBId;
+          side = "B";
+        } else if (teamA?.players?.some((p) => p.id === eventPlayerId)) {
+          eventTeamId = match.teamAId;
+          side = "A";
         } else if (teamB?.players?.some((p) => p.id === eventPlayerId)) {
-          eventTeamId = teamB.id;
+          eventTeamId = match.teamBId;
+          side = "B";
         } else {
-          eventTeamId = selectedEventTeamId || teamA?.id;
+          eventTeamId = selectedEventTeamId || match.teamAId;
+          side =
+            eventTeamId === match.teamBId
+              ? "B"
+              : "A";
         }
 
         const res = await fetch(`/api/matches/${matchId}/events`, {
@@ -775,6 +788,7 @@ export default function MatchScorerPage() {
           body: JSON.stringify({
             type: eventType,
             teamId: eventTeamId,
+            side,
             playerId: eventPlayerId,
             minute: eventMinute
               ? parseInt(eventMinute, 10)
