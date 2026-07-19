@@ -1,3 +1,5 @@
+import { isPlaceholderTeam } from "@/lib/tournamentResolver";
+
 export const SET_BASED_SPORTS = ["VOLLEYBALL", "BADMINTON", "PICKLEBALL"];
 
 export const SPORT_CONFIGS = {
@@ -90,16 +92,19 @@ export function formatSetScore(sets, teamAId) {
 export function calculateSetBasedStandings(category) {
   const table = {};
   (category?.teams || []).forEach((t) => {
+    if (isPlaceholderTeam(t.name)) return;
     table[t.id] = {
       id: t.id,
       name: t.name,
       logoUrl: t.logoUrl || null,
+      players: t.players || [],
       played: 0,
       won: 0,
       lost: 0,
       points: 0,
       setsFor: 0,
       setsAgainst: 0,
+      setDiff: 0,
     };
   });
 
@@ -127,11 +132,17 @@ export function calculateSetBasedStandings(category) {
     });
   });
 
-  return Object.values(table).sort(
-    (x, y) =>
-      y.points - x.points ||
-      y.won - x.won ||
-      y.setsFor - x.setsFor ||
-      x.name.localeCompare(y.name)
-  );
+  return Object.values(table)
+    .map((row) => ({
+      ...row,
+      setDiff: row.setsFor - row.setsAgainst,
+    }))
+    .sort(
+      (x, y) =>
+        y.points - x.points ||
+        y.won - x.won ||
+        y.setDiff - x.setDiff ||
+        y.setsFor - x.setsFor ||
+        x.name.localeCompare(y.name)
+    );
 }

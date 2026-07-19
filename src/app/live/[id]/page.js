@@ -42,7 +42,11 @@ import {
   SPORT_CONFIGS,
   getSetTarget,
 } from "@/lib/setBasedSports";
-import { categoryDisplayName } from "@/lib/sports";
+import {
+  categoryDisplayName,
+  isSinglesCategory,
+  isDoublesOrMixedCategory,
+} from "@/lib/sports";
 import { isPlaceholderTeam, buildFootballStandings } from "@/lib/tournamentResolver";
 import { getRoundDisplayName } from "@/lib/scheduleFormats";
 import { applyLiveBoardDelta, mergeLiveBoardSnapshot } from "@/lib/liveBoardMerge";
@@ -2147,7 +2151,7 @@ export default function PublicLiveBoard() {
               {isCricket
                 ? "Win 2 pts · Tie 1 pt · Updates when a match is completed"
                 : isSetBased
-                  ? "Win 3 pts · Updates when a match is completed"
+                  ? "Win 3 pts · SF/SA sets · SD set difference"
                   : "Updates when a match is marked completed"}
             </p>
 
@@ -2169,12 +2173,20 @@ export default function PublicLiveBoard() {
                     <thead>
                       <tr className="bg-[#082e1c] text-[10px] text-white uppercase font-bold">
                         <th className="py-3 px-4 w-12 text-center">#</th>
-                        <th className="py-3 px-4">Team</th>
+                        <th className="py-3 px-4">
+                          {isSinglesCategory(activeCategory)
+                            ? "Player"
+                            : isDoublesOrMixedCategory(activeCategory)
+                              ? "Pair"
+                              : "Team"}
+                        </th>
                         <th className="py-3 px-2 text-center w-12">P</th>
                         <th className="py-3 px-2 text-center w-12">W</th>
-                        <th className="py-3 px-2 text-center w-12">
-                          {isCricket ? "T" : "D"}
-                        </th>
+                        {!isSetBased && (
+                          <th className="py-3 px-2 text-center w-12">
+                            {isCricket ? "T" : "D"}
+                          </th>
+                        )}
                         <th className="py-3 px-2 text-center w-12">L</th>
                         {!isCricket && !isSetBased && (
                           <th className="py-3 px-2 text-center w-12">GD</th>
@@ -2183,7 +2195,11 @@ export default function PublicLiveBoard() {
                           <th className="py-3 px-2 text-center w-14">RF</th>
                         )}
                         {isSetBased && (
-                          <th className="py-3 px-2 text-center w-14">SF</th>
+                          <>
+                            <th className="py-3 px-2 text-center w-12">SF</th>
+                            <th className="py-3 px-2 text-center w-12">SA</th>
+                            <th className="py-3 px-2 text-center w-12">SD</th>
+                          </>
                         )}
                         <th className="py-3 px-4 text-center w-16 bg-[#062416] text-mustard-gold border-l border-[#0a331f]">
                           Pts
@@ -2204,9 +2220,11 @@ export default function PublicLiveBoard() {
                           </td>
                           <td className="py-3 px-2 text-center">{t.played}</td>
                           <td className="py-3 px-2 text-center">{t.won}</td>
-                          <td className="py-3 px-2 text-center">
-                            {isCricket ? t.tied : isSetBased ? "—" : t.drawn}
-                          </td>
+                          {!isSetBased && (
+                            <td className="py-3 px-2 text-center">
+                              {isCricket ? t.tied : t.drawn}
+                            </td>
+                          )}
                           <td className="py-3 px-2 text-center">{t.lost}</td>
                           {!isCricket && !isSetBased && (
                             <td
@@ -2221,10 +2239,26 @@ export default function PublicLiveBoard() {
                             <td className="py-3 px-2 text-center">{t.runsFor}</td>
                           )}
                           {isSetBased && (
-                            <td className="py-3 px-2 text-center">{t.setsFor ?? 0}</td>
+                            <>
+                              <td className="py-3 px-2 text-center">{t.setsFor ?? 0}</td>
+                              <td className="py-3 px-2 text-center">{t.setsAgainst ?? 0}</td>
+                              <td
+                                className={`py-3 px-2 text-center font-bold ${
+                                  (t.setDiff ?? 0) > 0
+                                    ? "text-emerald-700"
+                                    : (t.setDiff ?? 0) < 0
+                                      ? "text-red-500"
+                                      : ""
+                                }`}
+                              >
+                                {(t.setDiff ?? 0) > 0
+                                  ? `+${t.setDiff}`
+                                  : (t.setDiff ?? 0)}
+                              </td>
+                            </>
                           )}
                           <td className="py-3 px-4 text-center font-bold bg-[#062416]/10 text-sm border-l border-[#093c24]/20">
-                            {isCricket ? t.points : isSetBased ? t.points : t.pts}
+                            {isCricket || isSetBased ? t.points : t.pts}
                           </td>
                         </tr>
                       ))}

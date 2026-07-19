@@ -17,6 +17,7 @@ import {
 } from "@/lib/cricket";
 import { uploadImageToSupabase } from "@/lib/imageUpload";
 import { categoryDisplayName, isCricketSport, isSetBasedSport, isSinglesCategory, isDoublesOrMixedCategory, entryLabel, entryLabelPlural, entryAvatarUrl } from "@/lib/sports";
+import { calculateSetBasedStandings } from "@/lib/setBasedSports";
 import { isPlaceholderTeam, buildFootballStandings } from "@/lib/tournamentResolver";
 import {
   SCHEDULE_FORMATS,
@@ -1038,6 +1039,33 @@ export default function TournamentDashboard() {
       exportToCSV(`${tournament.name.replace(/\s+/g, "_")}_Standings.csv`, headers, rows);
       return;
     }
+    if (isSetBasedSport(getActiveCategory()?.sport)) {
+      const cat = getActiveCategory();
+      const headers = [
+        "Position",
+        isSinglesCategory(cat) ? "Player" : isDoublesOrMixedCategory(cat) ? "Pair" : "Team",
+        "Played",
+        "Won",
+        "Lost",
+        "Sets For",
+        "Sets Against",
+        "Set Diff",
+        "Points",
+      ];
+      const rows = calculateSetBasedStandings(cat).map((t, idx) => [
+        idx + 1,
+        t.name,
+        t.played,
+        t.won,
+        t.lost,
+        t.setsFor,
+        t.setsAgainst,
+        t.setDiff,
+        t.points,
+      ]);
+      exportToCSV(`${tournament.name.replace(/\s+/g, "_")}_Standings.csv`, headers, rows);
+      return;
+    }
     const standingsData = calculateStandings();
     const headers = ["Position", "Team", "Played", "Won", "Drawn", "Lost", "GF", "GA", "GD", "Points"];
     const rows = standingsData.map((t, idx) => [
@@ -1131,7 +1159,14 @@ export default function TournamentDashboard() {
   const cricketStandings = calculateCricketStandings(activeCategory).filter(
     (t) => !isPlaceholderTeam(t.name)
   );
-  const standings = isCricket ? cricketStandings : footballStandings;
+  const setBasedStandings = isSetBased
+    ? calculateSetBasedStandings(activeCategory)
+    : [];
+  const standings = isCricket
+    ? cricketStandings
+    : isSetBased
+      ? setBasedStandings
+      : footballStandings;
   const topScorers = isSetBased ? [] : calculateTopScorers();
   const cricketLeaders = isCricket
     ? calculateCricketLeaders(activeCategory)
@@ -2498,15 +2533,21 @@ export default function TournamentDashboard() {
         {activeTab === "standings" && (
           <div className="space-y-6 animate-fadeIn">
             <div className="flex flex-col gap-2 sm:flex-row sm:justify-between sm:items-center">
-              <h3 className="text-xs font-bold text-deep-forest/65 uppercase tracking-widest font-mono">League Standings</h3>
+              <h3 className="text-xs font-bold text-deep-forest/65 uppercase tracking-widest font-mono">
+                {isSetBased ? "Standings" : "League Standings"}
+              </h3>
               <span className="text-[10px] font-mono text-deep-forest bg-white border border-dashed border-mustard-gold rounded px-3 py-1.5 font-bold w-fit">
-                {isCricket ? "W=2 PTS, T=1 PTS, L=0 PTS" : "W=3 PTS, D=1 PTS, L=0 PTS"}
+                {isCricket
+                  ? "W=2 PTS, T=1 PTS, L=0 PTS"
+                  : isSetBased
+                    ? "W=3 PTS · Best of sets · No draws"
+                    : "W=3 PTS, D=1 PTS, L=0 PTS"}
               </span>
             </div>
 
             {standings.length === 0 ? (
               <div className="text-center py-20 bg-white border-2 border-dashed border-mustard-gold rounded-2xl text-slate-400 font-mono text-xs shadow-sm">
-                No standings data available. Add clubs and generate schedules.
+                No standings data available. Add {entriesLabel.toLowerCase()} and generate schedules.
               </div>
             ) : (
               <div className="space-y-8">
@@ -2524,13 +2565,23 @@ export default function TournamentDashboard() {
                       <thead>
                         <tr className="bg-[#082e1c] text-[10px] text-white uppercase font-bold border-b border-[#0a331f]">
                           <th className="py-3 px-4 w-14 text-center">#</th>
-                          <th className="py-3 px-4 font-sans text-sm tracking-wide">Team</th>
+                          <th className="py-3 px-4 font-sans text-sm tracking-wide">
+                            {isSingles ? "Player" : isPairEntry ? "Pair" : "Team"}
+                          </th>
                           <th className="py-3 px-3 text-center w-14">P</th>
                           <th className="py-3 px-3 text-center w-14">W</th>
-                          <th className="py-3 px-3 text-center w-14">{isCricket ? "T" : "D"}</th>
+                          {!isSetBased && (
+                            <th className="py-3 px-3 text-center w-14">{isCricket ? "T" : "D"}</th>
+                          )}
                           <th className="py-3 px-3 text-center w-14">L</th>
                           {isCricket ? (
                             <th className="py-3 px-3 text-center w-14">RF</th>
+                          ) : isSetBased ? (
+                            <>
+                              <th className="py-3 px-3 text-center w-14">SF</th>
+                              <th className="py-3 px-3 text-center w-14">SA</th>
+                              <th className="py-3 px-3 text-center w-14">SD</th>
+                            </>
                           ) : (
                             <>
                               <th className="py-3 px-3 text-center w-14">GF</th>
@@ -2565,10 +2616,28 @@ export default function TournamentDashboard() {
                               </td>
                               <td className="py-3 px-3 text-center">{t.played}</td>
                               <td className="py-3 px-3 text-center">{t.won}</td>
-                              <td className="py-3 px-3 text-center">{isCricket ? t.tied : t.drawn}</td>
+                              {!isSetBased && (
+                                <td className="py-3 px-3 text-center">{isCricket ? t.tied : t.drawn}</td>
+                              )}
                               <td className="py-3 px-3 text-center">{t.lost}</td>
                               {isCricket ? (
                                 <td className="py-3 px-3 text-center text-slate-500">{t.runsFor}</td>
+                              ) : isSetBased ? (
+                                <>
+                                  <td className="py-3 px-3 text-center text-slate-500">{t.setsFor}</td>
+                                  <td className="py-3 px-3 text-center text-slate-500">{t.setsAgainst}</td>
+                                  <td
+                                    className={`py-3 px-3 text-center font-bold ${
+                                      t.setDiff > 0
+                                        ? "text-emerald-700"
+                                        : t.setDiff < 0
+                                          ? "text-red-500"
+                                          : "text-[#0a331f]/70"
+                                    }`}
+                                  >
+                                    {t.setDiff > 0 ? `+${t.setDiff}` : t.setDiff}
+                                  </td>
+                                </>
                               ) : (
                                 <>
                                   <td className="py-3 px-3 text-center text-slate-500">{t.gf}</td>
@@ -2579,7 +2648,7 @@ export default function TournamentDashboard() {
                                 </>
                               )}
                               <td className="py-3 px-5 text-center font-bold bg-[#062416]/10 text-deep-forest border-l border-[#093c24]/20 text-sm">
-                                {isCricket ? t.points : t.pts}
+                                {isCricket || isSetBased ? t.points : t.pts}
                               </td>
                             </tr>
                           );
@@ -2591,7 +2660,9 @@ export default function TournamentDashboard() {
                   <div className="text-[10px] font-mono text-slate-500 pt-2 border-t border-dotted border-slate-200">
                     {isCricket
                       ? "Win = 2 pts · Tie = 1 pt · Loss = 0 pts"
-                      : "Win = 3 pts · Draw = 1 pt · Loss = 0 pts"}
+                      : isSetBased
+                        ? "Win = 3 pts · Loss = 0 · SF/SA = sets for/against · SD = set difference"
+                        : "Win = 3 pts · Draw = 1 pt · Loss = 0 pts"}
                   </div>
                 </div>
 
