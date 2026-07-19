@@ -26,7 +26,6 @@ export function isPlaceholderTeam(name) {
 
 /**
  * SF / Final rounds are small (1–2 matches). Group rounds are larger.
- * Used so knockout results never inflate the league points table.
  */
 export function isKnockoutRound(round, allRounds = []) {
   const rounds = allRounds.length > 0 ? allRounds : [round];
@@ -37,7 +36,7 @@ export function isKnockoutRound(round, allRounds = []) {
   return n <= 2 && n < maxSize;
 }
 
-/** League / group points table — COMPLETED group matches only (skips TBD & knockout). */
+/** Points table from all COMPLETED fixtures (group + knockout). Skips TBD placeholders. */
 export function buildFootballStandings(category) {
   if (!category) return [];
 
@@ -68,7 +67,6 @@ export function buildFootballStandings(category) {
   const byId = Object.fromEntries(standings.map((t) => [t.id, t]));
 
   for (const round of rounds) {
-    if (isKnockoutRound(round, rounds)) continue;
     for (const match of round.matches || []) {
       if (match.status !== "COMPLETED") continue;
       if (
