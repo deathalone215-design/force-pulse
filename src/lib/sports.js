@@ -57,6 +57,14 @@ export function entryLabelPlural(category) {
   return "Clubs";
 }
 
+/** Prefer entry logo, then first player's photo (Singles). */
+export function entryAvatarUrl(team) {
+  if (!team) return null;
+  if (team.logoUrl) return team.logoUrl;
+  const p = team.players?.[0];
+  return p?.logoUrl || null;
+}
+
 export function sportLabel(sport) {
   const s = normalizeSport(sport);
   if (s === "CRICKET") return "Cricket";

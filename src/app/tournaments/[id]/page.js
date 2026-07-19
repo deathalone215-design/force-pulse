@@ -16,7 +16,7 @@ import {
   calculateCricketStandings,
 } from "@/lib/cricket";
 import { uploadImageToSupabase } from "@/lib/imageUpload";
-import { categoryDisplayName, isCricketSport, isSetBasedSport, isSinglesCategory, isDoublesOrMixedCategory, entryLabel, entryLabelPlural } from "@/lib/sports";
+import { categoryDisplayName, isCricketSport, isSetBasedSport, isSinglesCategory, isDoublesOrMixedCategory, entryLabel, entryLabelPlural, entryAvatarUrl } from "@/lib/sports";
 import { isPlaceholderTeam, buildFootballStandings } from "@/lib/tournamentResolver";
 import {
   SCHEDULE_FORMATS,
@@ -1403,9 +1403,9 @@ export default function TournamentDashboard() {
                             <div className="grid grid-cols-3 items-center gap-1.5 sm:gap-3 text-center mb-6">
                               {/* Team A Info */}
                               <div className="space-y-2 w-full min-w-0 max-w-[88px] sm:max-w-[100px] md:max-w-[140px] justify-self-center flex flex-col items-center">
-                                {match.teamA?.logoUrl ? (
+                                {entryAvatarUrl(match.teamA) ? (
                                   <img
-                                    src={match.teamA.logoUrl}
+                                    src={entryAvatarUrl(match.teamA)}
                                     alt={match.teamA.name}
                                     className="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-cover shadow-sm border border-white"
                                   />
@@ -1447,9 +1447,9 @@ export default function TournamentDashboard() {
 
                               {/* Team B Info */}
                               <div className="space-y-2 w-full min-w-0 max-w-[88px] sm:max-w-[100px] md:max-w-[140px] justify-self-center flex flex-col items-center">
-                                {match.teamB?.logoUrl ? (
+                                {entryAvatarUrl(match.teamB) ? (
                                   <img
-                                    src={match.teamB.logoUrl}
+                                    src={entryAvatarUrl(match.teamB)}
                                     alt={match.teamB.name}
                                     className="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-cover shadow-sm border border-white"
                                   />
@@ -1792,6 +1792,9 @@ export default function TournamentDashboard() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {categoryTeams.filter(t => !isPlaceholderTeam(t.name)).map((team) => {
                     const isEditing = editingTeamId === team.id;
+                    const avatarUrl = entryAvatarUrl(team);
+                    const singlesPlayer = isSingles ? team.players?.[0] : null;
+                    const displayName = singlesPlayer?.name || team.name;
                     return (
                     <div 
                       key={team.id}
@@ -1801,24 +1804,24 @@ export default function TournamentDashboard() {
                           : "border-mustard-gold hover:border-solid hover:shadow-md"
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3 mb-4">
+                      <div className={`flex items-start justify-between gap-3 ${isSingles && !isEditing ? "" : "border-b border-slate-100 pb-3 mb-4"}`}>
                         <div className="flex items-center gap-3 min-w-0">
-                          {team.logoUrl ? (
+                          {avatarUrl ? (
                             <img
-                              src={team.logoUrl}
-                              alt={team.name}
+                              src={avatarUrl}
+                              alt={displayName}
                               className="w-12 h-12 rounded-full object-cover border-2 border-mustard-gold/60 shadow-sm shrink-0"
                             />
                           ) : (
                             <div 
-                              style={{ background: getTeamGradient(team.name) }}
+                              style={{ background: getTeamGradient(displayName) }}
                               className="w-12 h-12 rounded-full flex items-center justify-center text-xs font-bold text-white uppercase select-none border border-white shadow-sm shrink-0"
                             >
-                              {team.name.slice(0, 2)}
+                              {displayName.slice(0, 2)}
                             </div>
                           )}
                           <div className="min-w-0">
-                            <h4 className="font-bold text-deep-forest uppercase text-sm tracking-wide truncate">{team.name}</h4>
+                            <h4 className="font-bold text-deep-forest uppercase text-sm tracking-wide truncate">{displayName}</h4>
                             {!isSingles && (
                               <span className="text-[9px] font-mono text-deep-forest/60 uppercase font-bold">
                                 {team.players?.length || 0}{" "}
@@ -1827,7 +1830,7 @@ export default function TournamentDashboard() {
                             )}
                             {isSingles && (
                               <span className="text-[9px] font-mono text-deep-forest/60 uppercase font-bold">
-                                Singles player
+                                {avatarUrl ? "Player photo on file" : "Add a photo via Edit"}
                               </span>
                             )}
                           </div>
@@ -2262,9 +2265,9 @@ export default function TournamentDashboard() {
                   <div className="flex flex-wrap gap-2 pt-2">
                     {categoryTeams.filter(t => !isPlaceholderTeam(t.name)).map(team => (
                       <span key={team.id} className="text-xs font-mono bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-deep-forest flex items-center gap-2 shadow-sm">
-                        {team.logoUrl ? (
+                        {entryAvatarUrl(team) ? (
                           <img
-                            src={team.logoUrl}
+                            src={entryAvatarUrl(team)}
                             alt=""
                             className="w-5 h-5 rounded-full object-cover border border-slate-200 shrink-0 bg-white"
                           />
@@ -2544,9 +2547,9 @@ export default function TournamentDashboard() {
                             <tr key={t.id} className="bg-[#fcf7ed] hover:bg-amber-50/40 transition-colors">
                               <td className="py-3 px-4 text-center font-bold text-xs">{idx + 1}</td>
                               <td className="py-3 px-4 font-bold font-sans flex items-center gap-3 text-sm text-[#0a331f]">
-                                {t.logoUrl ? (
+                                {entryAvatarUrl(t) ? (
                                   <img
-                                    src={t.logoUrl}
+                                    src={entryAvatarUrl(t)}
                                     alt=""
                                     className="w-7 h-7 rounded-full object-cover border border-white shadow-sm shrink-0 bg-white"
                                   />

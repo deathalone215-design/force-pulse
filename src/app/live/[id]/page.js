@@ -68,6 +68,9 @@ function withTeamLogo(team, category) {
   if (team.logoUrl) return team;
   const fromCat = (category?.teams || []).find((t) => t.id === team.id);
   if (fromCat?.logoUrl) return { ...team, logoUrl: fromCat.logoUrl };
+  const playerLogo =
+    team.players?.[0]?.logoUrl || fromCat?.players?.[0]?.logoUrl || null;
+  if (playerLogo) return { ...team, logoUrl: playerLogo };
   return team;
 }
 
