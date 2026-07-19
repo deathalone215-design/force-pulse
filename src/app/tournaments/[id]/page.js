@@ -2008,10 +2008,20 @@ export default function TournamentDashboard() {
                   <div className="flex flex-wrap gap-2 pt-2">
                     {categoryTeams.filter(t => !isPlaceholderTeam(t.name)).map(team => (
                       <span key={team.id} className="text-xs font-mono bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-deep-forest flex items-center gap-2 shadow-sm">
-                        <span 
-                          style={{ background: getTeamGradient(team.name) }} 
-                          className="w-2.5 h-2.5 rounded-full" 
-                        />
+                        {team.logoUrl ? (
+                          <img
+                            src={team.logoUrl}
+                            alt=""
+                            className="w-5 h-5 rounded-full object-cover border border-slate-200 shrink-0 bg-white"
+                          />
+                        ) : (
+                          <span
+                            style={{ background: getTeamGradient(team.name) }}
+                            className="w-5 h-5 rounded-full flex items-center justify-center text-[8px] text-white font-bold uppercase shrink-0"
+                          >
+                            {team.name.slice(0, 2)}
+                          </span>
+                        )}
                         {team.name}
                       </span>
                     ))}
@@ -2262,12 +2272,20 @@ export default function TournamentDashboard() {
                             <tr key={t.id} className="bg-[#fcf7ed] hover:bg-amber-50/40 transition-colors">
                               <td className="py-3 px-4 text-center font-bold text-xs">{idx + 1}</td>
                               <td className="py-3 px-4 font-bold font-sans flex items-center gap-3 text-sm text-[#0a331f]">
-                                <div 
-                                  style={{ background: getTeamGradient(t.name) }}
-                                  className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] text-white font-bold uppercase select-none border border-white shadow-sm"
-                                >
-                                  {t.name.slice(0, 2)}
-                                </div>
+                                {t.logoUrl ? (
+                                  <img
+                                    src={t.logoUrl}
+                                    alt=""
+                                    className="w-7 h-7 rounded-full object-cover border border-white shadow-sm shrink-0 bg-white"
+                                  />
+                                ) : (
+                                  <div
+                                    style={{ background: getTeamGradient(t.name) }}
+                                    className="w-7 h-7 rounded-full flex items-center justify-center text-[9px] text-white font-bold uppercase select-none border border-white shadow-sm shrink-0"
+                                  >
+                                    {t.name.slice(0, 2)}
+                                  </div>
+                                )}
                                 <span className="truncate max-w-[160px] md:max-w-xs uppercase tracking-wide">{t.name}</span>
                               </td>
                               <td className="py-3 px-3 text-center">{t.played}</td>

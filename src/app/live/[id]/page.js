@@ -118,6 +118,12 @@ function calculateTopScorers(category) {
 
 function TeamBadge({ team, size = "md" }) {
   const [imgFailed, setImgFailed] = useState(false);
+  const logoUrl = team?.logoUrl || null;
+
+  useEffect(() => {
+    setImgFailed(false);
+  }, [logoUrl]);
+
   const sizes = {
     sm: "w-8 h-8 text-[9px]",
     md: "w-11 h-11 text-xs",
@@ -126,10 +132,10 @@ function TeamBadge({ team, size = "md" }) {
   };
   const cls = sizes[size] || sizes.md;
 
-  if (team?.logoUrl && !imgFailed) {
+  if (logoUrl && !imgFailed) {
     return (
       <img
-        src={team.logoUrl}
+        src={logoUrl}
         alt={team.name || "Team"}
         onError={() => setImgFailed(true)}
         className={`${cls} rounded-full object-cover border-2 border-white shadow-md bg-white shrink-0`}
