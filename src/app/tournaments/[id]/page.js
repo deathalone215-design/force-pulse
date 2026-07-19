@@ -209,6 +209,14 @@ export default function TournamentDashboard() {
     return () => clearInterval(timer);
   }, [tournament, activeCategoryId]);
 
+  // Set-based sports (badminton / pickleball) have no football Scorers Hub
+  useEffect(() => {
+    const cat = getActiveCategory();
+    if (isSetBasedSport(cat?.sport) && activeTab === "scorers") {
+      setActiveTab("standings");
+    }
+  }, [tournament, activeCategoryId, activeTab]);
+
   const fetchTournamentDetails = async ({ silent = false } = {}) => {
     try {
       if (!silent) setLoading(true);
@@ -1129,12 +1137,6 @@ export default function TournamentDashboard() {
     ? calculateCricketLeaders(activeCategory)
     : { runScorers: [], wicketTakers: [] };
   const liveMatches = categoryRounds.flatMap(r => r.matches).filter(m => m.status === "LIVE");
-
-  useEffect(() => {
-    if (isSetBased && activeTab === "scorers") {
-      setActiveTab("standings");
-    }
-  }, [isSetBased, activeTab]);
 
   return (
     <div className="flex flex-col min-h-screen bg-[#FAF6EE] text-[#0a331f] font-sans selection:bg-mustard-gold selection:text-deep-forest overflow-x-hidden relative">
