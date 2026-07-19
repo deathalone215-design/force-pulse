@@ -16,7 +16,7 @@ import {
   calculateCricketStandings,
 } from "@/lib/cricket";
 import { uploadImageToSupabase } from "@/lib/imageUpload";
-import { categoryDisplayName, isCricketSport, isSinglesCategory, isDoublesOrMixedCategory, entryLabel, entryLabelPlural } from "@/lib/sports";
+import { categoryDisplayName, isCricketSport, isSetBasedSport, isSinglesCategory, isDoublesOrMixedCategory, entryLabel, entryLabelPlural } from "@/lib/sports";
 import { isPlaceholderTeam, buildFootballStandings } from "@/lib/tournamentResolver";
 import {
   SCHEDULE_FORMATS,
@@ -1114,6 +1114,7 @@ export default function TournamentDashboard() {
   const categoryTeams = activeCategory?.teams || [];
   const categoryRounds = activeCategory?.rounds || [];
   const isCricket = isCricketSport(activeCategory?.sport);
+  const isSetBased = isSetBasedSport(activeCategory?.sport);
   const isSingles = isSinglesCategory(activeCategory);
   const isPairEntry = isDoublesOrMixedCategory(activeCategory);
   const entriesLabel = entryLabelPlural(activeCategory);
@@ -1123,11 +1124,17 @@ export default function TournamentDashboard() {
     (t) => !isPlaceholderTeam(t.name)
   );
   const standings = isCricket ? cricketStandings : footballStandings;
-  const topScorers = calculateTopScorers();
+  const topScorers = isSetBased ? [] : calculateTopScorers();
   const cricketLeaders = isCricket
     ? calculateCricketLeaders(activeCategory)
     : { runScorers: [], wicketTakers: [] };
   const liveMatches = categoryRounds.flatMap(r => r.matches).filter(m => m.status === "LIVE");
+
+  useEffect(() => {
+    if (isSetBased && activeTab === "scorers") {
+      setActiveTab("standings");
+    }
+  }, [isSetBased, activeTab]);
 
   return (
     <div className="flex flex-col min-h-screen bg-[#FAF6EE] text-[#0a331f] font-sans selection:bg-mustard-gold selection:text-deep-forest overflow-x-hidden relative">
@@ -1223,15 +1230,28 @@ export default function TournamentDashboard() {
           <div className="max-w-6xl mx-auto px-4 overflow-x-auto tab-scroll flex gap-2">
             {[
               { id: "dashboard", label: "Matches", short: "Matches", icon: Activity },
-              { id: "teams", label: "Teams & Squads", short: "Teams", icon: Users },
+              {
+                id: "teams",
+                label: isSingles
+                  ? "Players"
+                  : isPairEntry
+                    ? "Pairs"
+                    : "Teams & Squads",
+                short: isSingles ? "Players" : isPairEntry ? "Pairs" : "Teams",
+                icon: Users,
+              },
               { id: "schedule", label: "Schedule Builder", short: "Schedule", icon: Calendar },
               { id: "standings", label: "Standings Table", short: "Standings", icon: Trophy },
-              {
-                id: "scorers",
-                label: isCricket ? "Leaders Hub" : "Scorers Hub",
-                short: isCricket ? "Leaders" : "Scorers",
-                icon: Award,
-              },
+              ...(!isSetBased
+                ? [
+                    {
+                      id: "scorers",
+                      label: isCricket ? "Leaders Hub" : "Scorers Hub",
+                      short: isCricket ? "Leaders" : "Scorers",
+                      icon: Award,
+                    },
+                  ]
+                : []),
               { id: "exports", label: "Exports Desk", short: "Exports", icon: Download },
             ].map((tab) => {
               const Icon = tab.icon;
@@ -2570,8 +2590,8 @@ export default function TournamentDashboard() {
                   </div>
                 </div>
 
-                {/* Top Scorers inside Standings */}
-                {!isCricket && topScorers.length > 0 && (
+                {/* Top Scorers inside Standings — football only */}
+                {!isCricket && !isSetBased && topScorers.length > 0 && (
                   <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl p-6 shadow-sm space-y-4">
                     <h4 className="text-2xl font-display text-deep-forest uppercase tracking-normal select-none mb-4">
                       Top scorers
@@ -2705,7 +2725,7 @@ export default function TournamentDashboard() {
           </div>
         )}
 
-        {activeTab === "scorers" && !isCricket && (
+        {activeTab === "scorers" && !isCricket && !isSetBased && (
           <div className="space-y-6 animate-fadeIn">
             <h3 className="text-xs font-bold text-deep-forest/65 uppercase tracking-widest font-mono font-bold">Golden Boot Leaderboard</h3>
             <p className="text-[10px] font-mono text-deep-forest/45 -mt-2">
@@ -2811,7 +2831,8 @@ export default function TournamentDashboard() {
               </button>
             </div>
 
-            {/* Top Scorers Export */}
+            {/* Top Scorers Export — football only */}
+            {!isSetBased && !isCricket && (
             <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl p-6 space-y-4 shadow-sm flex flex-col justify-between relative overflow-hidden group">
               <div className="space-y-3">
                 <div className="w-10 h-10 rounded-xl bg-cream-bg border border-slate-200 flex items-center justify-center text-mustard-gold">
@@ -2832,6 +2853,20 @@ export default function TournamentDashboard() {
                 Export Leaderboard (CSV)
               </button>
             </div>
+            )}
+            {isCricket && (
+            <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl p-6 space-y-4 shadow-sm flex flex-col justify-between relative overflow-hidden group">
+              <div className="space-y-3">
+                <div className="w-10 h-10 rounded-xl bg-cream-bg border border-slate-200 flex items-center justify-center text-mustard-gold">
+                  <Award className="w-5 h-5" />
+                </div>
+                <h4 className="text-sm font-bold text-deep-forest uppercase tracking-wider font-mono">Cricket Leaders Export</h4>
+                <p className="text-xs text-deep-forest/75 leading-relaxed">
+                  Use the Leaders Hub to view run-scorers and wicket-takers for this category.
+                </p>
+              </div>
+            </div>
+            )}
           </div>
         )}
 
