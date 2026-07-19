@@ -45,7 +45,7 @@ import {
 import { categoryDisplayName } from "@/lib/sports";
 import { isPlaceholderTeam } from "@/lib/tournamentResolver";
 import { getRoundDisplayName } from "@/lib/scheduleFormats";
-import { applyLiveBoardDelta } from "@/lib/liveBoardMerge";
+import { applyLiveBoardDelta, mergeLiveBoardSnapshot } from "@/lib/liveBoardMerge";
 import {
   formatFootballClock,
   footballElapsedSeconds,
@@ -1551,7 +1551,7 @@ export default function PublicLiveBoard() {
         if (!res.ok) throw new Error("Tournament not found");
         const data = await res.json();
         serverTimeRef.current = data.serverTime || new Date().toISOString();
-        setTournament(data);
+        setTournament((prev) => mergeLiveBoardSnapshot(prev, data));
         syncBoardMeta(data);
         deltaFailRef.current = 0;
         if (!silent) setError(null);

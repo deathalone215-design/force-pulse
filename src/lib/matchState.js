@@ -68,9 +68,14 @@ export function mergeMatchFromApi(existing, update, { force = false } = {}) {
     ...cleaned,
     teamA: cleaned.teamA || existing?.teamA,
     teamB: cleaned.teamB || existing?.teamB,
-    events: cleaned.events ?? existing?.events,
-    cricketBalls: cleaned.cricketBalls ?? existing?.cricketBalls,
-    matchSets: cleaned.matchSets ?? existing?.matchSets,
+    // Never let a scalar-only mutation response wipe the event log with []
+    events: Array.isArray(cleaned.events) ? cleaned.events : existing?.events,
+    cricketBalls: Array.isArray(cleaned.cricketBalls)
+      ? cleaned.cricketBalls
+      : existing?.cricketBalls,
+    matchSets: Array.isArray(cleaned.matchSets)
+      ? cleaned.matchSets
+      : existing?.matchSets,
   };
 }
 

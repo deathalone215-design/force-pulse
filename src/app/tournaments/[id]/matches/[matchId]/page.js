@@ -123,6 +123,9 @@ export default function MatchScorerPage() {
   const fetchGenRef = useRef(0);
   const deletedEventIdsRef = useRef(new Set());
   const pendingWritesRef = useRef(0);
+  const writeChainRef = useRef(Promise.resolve());
+  /** Always-fresh CAS version — avoids stale closures on rapid goal add/delete. */
+  const matchCasRef = useRef({ version: 0 });
   const prevClockSecRef = useRef(null);
   const clockMotionTimerRef = useRef(null);
   const extraMotionTimerRef = useRef(null);
@@ -235,6 +238,14 @@ export default function MatchScorerPage() {
   const match = ctx?.match;
   const categoryEarly = ctx?.category;
 
+  // Keep CAS version in sync, but never roll it backwards after a local write.
+  useEffect(() => {
+    if (match?.version == null) return;
+    if (match.version >= (matchCasRef.current.version || 0)) {
+      matchCasRef.current.version = match.version;
+    }
+  }, [match?.version]);
+
   // Football live clock tick (freeze while paused for injury / interruption)
   useEffect(() => {
     if (!match || match.status !== "LIVE" || !match.kickoffAt) return undefined;
@@ -289,6 +300,9 @@ export default function MatchScorerPage() {
     (update, { addEvent, removeEventId, force = true } = {}) => {
       // Invalidate in-flight full tournament GETs.
       fetchGenRef.current += 1;
+      if (update?.version != null) {
+        matchCasRef.current.version = update.version;
+      }
       setTournament((prev) =>
         patchMatchInTournament(prev, matchId, (m) => {
           const stamped = {
@@ -302,7 +316,9 @@ export default function MatchScorerPage() {
               ...next,
               events: [
                 addEvent,
-                ...(m.events || []).filter((e) => e.id !== addEvent.id),
+                ...(next.events || m.events || []).filter(
+                  (e) => e.id !== addEvent.id
+                ),
               ],
             };
           }
@@ -314,6 +330,9 @@ export default function MatchScorerPage() {
               ),
             };
           }
+          if (next?.version != null) {
+            matchCasRef.current.version = next.version;
+          }
           return next;
         })
       );
@@ -321,10 +340,20 @@ export default function MatchScorerPage() {
     [matchId]
   );
 
+  const casBody = useCallback(
+    () => casFields({ version: matchCasRef.current.version }, matchId),
+    [matchId]
+  );
+
   const withWrite = useCallback(async (fn) => {
     pendingWritesRef.current += 1;
+    const run = writeChainRef.current.then(fn, fn);
+    writeChainRef.current = run.then(
+      () => undefined,
+      () => undefined
+    );
     try {
-      return await fn();
+      return await run;
     } finally {
       pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
     }
@@ -332,7 +361,11 @@ export default function MatchScorerPage() {
 
   const lockClaimedRef = useRef(false);
   useEffect(() => {
-    if (!matchId || !match || lockClaimedRef.current) return undefined;
+    lockClaimedRef.current = false;
+  }, [matchId]);
+
+  useEffect(() => {
+    if (!matchId || !match?.id || lockClaimedRef.current) return undefined;
     const token = getScoreLockToken(matchId);
     if (!token) return undefined;
     let cancelled = false;
@@ -345,7 +378,7 @@ export default function MatchScorerPage() {
           cache: "no-store",
           body: JSON.stringify({
             claimLock: true,
-            ...casFields(match, matchId),
+            ...casBody(),
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -366,7 +399,7 @@ export default function MatchScorerPage() {
     return () => {
       cancelled = true;
     };
-  }, [matchId, match, applyMatchUpdate]);
+  }, [matchId, match?.id, applyMatchUpdate, casBody]);
 
   const updateMatchStatus = async (newStatus, { resetClock = false } = {}) => {
     if (updatingStatus) return;
@@ -405,7 +438,7 @@ export default function MatchScorerPage() {
           body: JSON.stringify({
             status: newStatus,
             resetClock,
-            ...casFields(match, matchId),
+            ...casBody(),
           }),
           credentials: "include",
           cache: "no-store",
@@ -479,7 +512,7 @@ export default function MatchScorerPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             periodAction,
-            ...casFields(match, matchId),
+            ...casBody(),
           }),
           credentials: "include",
           cache: "no-store",
@@ -587,7 +620,7 @@ export default function MatchScorerPage() {
         const res = await fetch(`/api/matches/${matchId}/status`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ setClock: raw, ...casFields(match, matchId) }),
+          body: JSON.stringify({ setClock: raw, ...casBody() }),
           credentials: "include",
           cache: "no-store",
         });
@@ -629,7 +662,7 @@ export default function MatchScorerPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             stoppageMinutes: n,
-            ...casFields(match, matchId),
+            ...casBody(),
           }),
           credentials: "include",
           cache: "no-store",
@@ -682,7 +715,7 @@ export default function MatchScorerPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             clockAction: action,
-            ...casFields(match, matchId),
+            ...casBody(),
           }),
           credentials: "include",
           cache: "no-store",
@@ -746,7 +779,7 @@ export default function MatchScorerPage() {
             minute: eventMinute
               ? parseInt(eventMinute, 10)
               : suggestedMinute,
-            ...casFields(match, matchId),
+            ...casBody(),
           }),
         });
 
@@ -814,7 +847,7 @@ export default function MatchScorerPage() {
           body: JSON.stringify({
             action: "delete",
             eventId,
-            ...casFields(match, matchId),
+            ...casBody(),
           }),
         });
         const data = await res.json().catch(() => ({}));
