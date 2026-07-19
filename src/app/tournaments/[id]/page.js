@@ -17,7 +17,7 @@ import {
 } from "@/lib/cricket";
 import { uploadImageToSupabase } from "@/lib/imageUpload";
 import { categoryDisplayName, isCricketSport } from "@/lib/sports";
-import { isPlaceholderTeam } from "@/lib/tournamentResolver";
+import { isPlaceholderTeam, buildFootballStandings } from "@/lib/tournamentResolver";
 import {
   SCHEDULE_FORMATS,
   generateScheduleRounds,
@@ -793,72 +793,11 @@ export default function TournamentDashboard() {
     }
   };
 
-  // Standings Calculations
+  // Standings Calculations — group stage only (TBD / knockout excluded)
   const calculateStandings = () => {
     const cat = getActiveCategory();
     if (!cat) return [];
-    
-    const standings = cat.teams
-      .filter(team => !isPlaceholderTeam(team.name))
-      .map(team => ({
-        id: team.id,
-        name: team.name,
-        played: 0,
-        won: 0,
-        drawn: 0,
-        lost: 0,
-        gf: 0,
-        ga: 0,
-        gd: 0,
-        pts: 0
-      }));
-
-    cat.rounds.forEach(round => {
-      round.matches.forEach(match => {
-        // Points table updates only when a match is marked COMPLETED
-        if (match.status === "COMPLETED") {
-          const homeIndex = standings.findIndex(t => t.id === match.teamAId);
-          const awayIndex = standings.findIndex(t => t.id === match.teamBId);
-
-          if (homeIndex !== -1 && awayIndex !== -1) {
-            const h = standings[homeIndex];
-            const a = standings[awayIndex];
-
-            h.played += 1;
-            a.played += 1;
-            h.gf += match.scoreA;
-            h.ga += match.scoreB;
-            a.gf += match.scoreB;
-            a.ga += match.scoreA;
-
-            if (match.scoreA > match.scoreB) {
-              h.won += 1;
-              h.pts += 3;
-              a.lost += 1;
-            } else if (match.scoreA < match.scoreB) {
-              a.won += 1;
-              a.pts += 3;
-              h.lost += 1;
-            } else {
-              h.drawn += 1;
-              h.pts += 1;
-              a.drawn += 1;
-              a.pts += 1;
-            }
-
-            h.gd = h.gf - h.ga;
-            a.gd = a.gf - a.ga;
-          }
-        }
-      });
-    });
-
-    return standings.sort((a, b) => {
-      if (b.pts !== a.pts) return b.pts - a.pts;
-      if (b.gd !== a.gd) return b.gd - a.gd;
-      if (b.gf !== a.gf) return b.gf - a.gf;
-      return a.name.localeCompare(b.name);
-    });
+    return buildFootballStandings(cat).map(({ teamObj: _t, ...row }) => row);
   };
 
   // Top Goal Scorers Calculations

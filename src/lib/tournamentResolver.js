@@ -24,6 +24,97 @@ export function isPlaceholderTeam(name) {
   return PLACEHOLDER_NAMES.some((p) => n.includes(p));
 }
 
+/**
+ * SF / Final rounds are small (1–2 matches). Group rounds are larger.
+ * Used so knockout results never inflate the league points table.
+ */
+export function isKnockoutRound(round, allRounds = []) {
+  const rounds = allRounds.length > 0 ? allRounds : [round];
+  const sizes = rounds.map((r) => (r.matches || []).length);
+  const maxSize = Math.max(0, ...sizes);
+  const n = (round?.matches || []).length;
+  if (maxSize <= 2) return false;
+  return n <= 2 && n < maxSize;
+}
+
+/** League / group points table — COMPLETED group matches only (skips TBD & knockout). */
+export function buildFootballStandings(category) {
+  if (!category) return [];
+
+  const rounds = category.rounds || [];
+  const placeholderIds = new Set(
+    (category.teams || [])
+      .filter((t) => isPlaceholderTeam(t.name))
+      .map((t) => t.id)
+  );
+
+  const standings = (category.teams || [])
+    .filter((team) => !isPlaceholderTeam(team.name))
+    .map((team) => ({
+      id: team.id,
+      name: team.name,
+      logoUrl: team.logoUrl,
+      played: 0,
+      won: 0,
+      drawn: 0,
+      lost: 0,
+      gf: 0,
+      ga: 0,
+      gd: 0,
+      pts: 0,
+      teamObj: team,
+    }));
+
+  const byId = Object.fromEntries(standings.map((t) => [t.id, t]));
+
+  for (const round of rounds) {
+    if (isKnockoutRound(round, rounds)) continue;
+    for (const match of round.matches || []) {
+      if (match.status !== "COMPLETED") continue;
+      if (
+        placeholderIds.has(match.teamAId) ||
+        placeholderIds.has(match.teamBId)
+      ) {
+        continue;
+      }
+      const h = byId[match.teamAId];
+      const a = byId[match.teamBId];
+      if (!h || !a) continue;
+
+      h.played += 1;
+      a.played += 1;
+      h.gf += match.scoreA;
+      h.ga += match.scoreB;
+      a.gf += match.scoreB;
+      a.ga += match.scoreA;
+
+      if (match.scoreA > match.scoreB) {
+        h.won += 1;
+        h.pts += 3;
+        a.lost += 1;
+      } else if (match.scoreA < match.scoreB) {
+        a.won += 1;
+        a.pts += 3;
+        h.lost += 1;
+      } else {
+        h.drawn += 1;
+        h.pts += 1;
+        a.drawn += 1;
+        a.pts += 1;
+      }
+      h.gd = h.gf - h.ga;
+      a.gd = a.gf - a.ga;
+    }
+  }
+
+  return standings.sort((a, b) => {
+    if (b.pts !== a.pts) return b.pts - a.pts;
+    if (b.gd !== a.gd) return b.gd - a.gd;
+    if (b.gf !== a.gf) return b.gf - a.gf;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 function getMatchWinner(match) {
   if (!match || match.status !== "COMPLETED") return null;
   if (match.scoreA > match.scoreB) return match.teamA;
@@ -41,62 +132,7 @@ export function resolveTournamentPlaceholders(category) {
   if (!category || !category.teams || !category.rounds) return category;
 
   const isPlaceholder = isPlaceholderTeam;
-
-  const realTeams = category.teams.filter((t) => !isPlaceholder(t.name));
-  const standings = realTeams.map((t) => ({
-    id: t.id,
-    name: t.name,
-    played: 0,
-    won: 0,
-    drawn: 0,
-    lost: 0,
-    gf: 0,
-    ga: 0,
-    gd: 0,
-    pts: 0,
-    teamObj: t,
-  }));
-
-  category.rounds.forEach((round) => {
-    round.matches.forEach((match) => {
-      if (match.status !== "COMPLETED") return;
-      const homeIndex = standings.findIndex((t) => t.id === match.teamAId);
-      const awayIndex = standings.findIndex((t) => t.id === match.teamBId);
-      if (homeIndex === -1 || awayIndex === -1) return;
-      const h = standings[homeIndex];
-      const a = standings[awayIndex];
-      h.played++;
-      a.played++;
-      h.gf += match.scoreA;
-      h.ga += match.scoreB;
-      a.gf += match.scoreB;
-      a.ga += match.scoreA;
-
-      if (match.scoreA > match.scoreB) {
-        h.won++;
-        h.pts += 3;
-        a.lost++;
-      } else if (match.scoreA < match.scoreB) {
-        a.won++;
-        a.pts += 3;
-        h.lost++;
-      } else {
-        h.drawn++;
-        h.pts += 1;
-        a.drawn++;
-        a.pts += 1;
-      }
-      h.gd = h.gf - h.ga;
-      a.gd = a.gf - a.ga;
-    });
-  });
-
-  standings.sort((a, b) => {
-    if (b.pts !== a.pts) return b.pts - a.pts;
-    if (b.gd !== a.gd) return b.gd - a.gd;
-    if (b.gf !== a.gf) return b.gf - a.gf;
-    return a.name.localeCompare(b.name);
-  });
+  const standings = buildFootballStandings(category);
 
   const mapping = {};
   const placeholderTeams = category.teams.filter((t) => isPlaceholder(t.name));
@@ -104,7 +140,7 @@ export function resolveTournamentPlaceholders(category) {
     t._sourceName = t.name;
   });
 
-  // Resolve seed placeholders from current standings whenever results exist.
+  // Resolve seed placeholders from group standings whenever results exist.
   placeholderTeams.forEach((t) => {
     const nameLower = (t._sourceName || t.name).toLowerCase().trim();
     if (isKnockoutWinnerPlaceholder(t._sourceName || t.name)) return;
