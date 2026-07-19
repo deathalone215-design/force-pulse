@@ -42,23 +42,6 @@ export function resolveTournamentPlaceholders(category) {
 
   const isPlaceholder = isPlaceholderTeam;
 
-  const realMatches = [];
-  category.rounds.forEach((round) => {
-    round.matches.forEach((match) => {
-      if (
-        match.teamA &&
-        match.teamB &&
-        !isPlaceholder(match.teamA.name) &&
-        !isPlaceholder(match.teamB.name)
-      ) {
-        realMatches.push(match);
-      }
-    });
-  });
-
-  const isLeagueCompleted =
-    realMatches.length === 0 || realMatches.every((m) => m.status === "COMPLETED");
-
   const realTeams = category.teams.filter((t) => !isPlaceholder(t.name));
   const standings = realTeams.map((t) => ({
     id: t.id,
@@ -121,27 +104,27 @@ export function resolveTournamentPlaceholders(category) {
     t._sourceName = t.name;
   });
 
-  if (isLeagueCompleted) {
-    placeholderTeams.forEach((t) => {
-      const nameLower = (t._sourceName || t.name).toLowerCase().trim();
-      if (isKnockoutWinnerPlaceholder(t._sourceName || t.name)) return;
-      let resolved = null;
-      if (nameLower.includes("1st")) resolved = standings[0]?.teamObj;
-      else if (nameLower.includes("2nd")) resolved = standings[1]?.teamObj;
-      else if (nameLower.includes("3rd")) resolved = standings[2]?.teamObj;
-      else if (nameLower.includes("4th")) resolved = standings[3]?.teamObj;
-      if (resolved) mapping[t.id] = resolved;
-    });
-  } else {
-    placeholderTeams.forEach((t) => {
-      if (isKnockoutWinnerPlaceholder(t._sourceName || t.name)) return;
-      const nameLower = (t._sourceName || t.name).toLowerCase().trim();
-      if (nameLower.includes("1st")) t.name = "TBD (1st Place)";
-      else if (nameLower.includes("2nd")) t.name = "TBD (2nd Place)";
-      else if (nameLower.includes("3rd")) t.name = "TBD (3rd Place)";
-      else if (nameLower.includes("4th")) t.name = "TBD (4th Place)";
-    });
-  }
+  // Resolve seed placeholders from current standings whenever results exist.
+  placeholderTeams.forEach((t) => {
+    const nameLower = (t._sourceName || t.name).toLowerCase().trim();
+    if (isKnockoutWinnerPlaceholder(t._sourceName || t.name)) return;
+    let resolved = null;
+    if (nameLower.includes("1st")) resolved = standings[0]?.teamObj;
+    else if (nameLower.includes("2nd")) resolved = standings[1]?.teamObj;
+    else if (nameLower.includes("3rd")) resolved = standings[2]?.teamObj;
+    else if (nameLower.includes("4th")) resolved = standings[3]?.teamObj;
+    if (resolved) {
+      mapping[t.id] = resolved;
+    } else if (nameLower.includes("1st")) {
+      t.name = "TBD (1st Place)";
+    } else if (nameLower.includes("2nd")) {
+      t.name = "TBD (2nd Place)";
+    } else if (nameLower.includes("3rd")) {
+      t.name = "TBD (3rd Place)";
+    } else if (nameLower.includes("4th")) {
+      t.name = "TBD (4th Place)";
+    }
+  });
 
   const getResolvedTeam = (team) => {
     if (!team) return team;

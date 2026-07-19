@@ -1,8 +1,25 @@
 import { shouldAcceptServerMatch } from "@/lib/matchState";
+import {
+  isPlaceholderTeam,
+  resolveTournamentPlaceholders,
+} from "@/lib/tournamentResolver";
 
 /** Prefer squads already attached on the live board. */
 function mergeTeam(localTeam, incomingTeam) {
   if (!incomingTeam) return localTeam;
+  // Live deltas send raw TBD placeholders — keep already-resolved club name/logo.
+  if (
+    isPlaceholderTeam(incomingTeam.name) &&
+    localTeam &&
+    !isPlaceholderTeam(localTeam.name)
+  ) {
+    return {
+      ...localTeam,
+      players: localTeam.players?.length
+        ? localTeam.players
+        : incomingTeam.players,
+    };
+  }
   return {
     ...incomingTeam,
     players: incomingTeam.players?.length
@@ -32,6 +49,11 @@ export function mergeLiveMatch(local, incoming) {
     ...incoming,
     teamA: mergeTeam(local.teamA, incoming.teamA),
     teamB: mergeTeam(local.teamB, incoming.teamB),
+    // Preserve slot ids used for scoring when delta omits them
+    teamAId: incoming.teamAId || local.teamAId,
+    teamBId: incoming.teamBId || local.teamBId,
+    resolvedTeamAId: incoming.resolvedTeamAId || local.resolvedTeamAId,
+    resolvedTeamBId: incoming.resolvedTeamBId || local.resolvedTeamBId,
     events: Array.isArray(incoming.events) ? incoming.events : local.events,
     cricketBalls: Array.isArray(incoming.cricketBalls)
       ? incoming.cricketBalls
@@ -42,13 +64,35 @@ export function mergeLiveMatch(local, incoming) {
   };
 }
 
+/** Re-run placeholder → club mapping after a delta patch. */
+export function reResolveLiveTournament(tournament) {
+  if (!tournament?.categories?.length) return tournament;
+  return {
+    ...tournament,
+    categories: tournament.categories.map((cat) =>
+      resolveTournamentPlaceholders({
+        ...cat,
+        teams: (cat.teams || []).map((t) => ({ ...t })),
+        rounds: (cat.rounds || []).map((round) => ({
+          ...round,
+          matches: (round.matches || []).map((m) => ({
+            ...m,
+            teamA: m.teamA ? { ...m.teamA } : m.teamA,
+            teamB: m.teamB ? { ...m.teamB } : m.teamB,
+          })),
+        })),
+      })
+    ),
+  };
+}
+
 /** Merge delta matches into an existing live-board tournament object (client-safe). */
 export function applyLiveBoardDelta(tournament, deltaMatches) {
   if (!tournament || !deltaMatches?.length) return tournament;
 
   const byId = new Map(deltaMatches.map((m) => [m.id, m]));
 
-  return {
+  const merged = {
     ...tournament,
     categories: (tournament.categories || []).map((cat) => ({
       ...cat,
@@ -68,6 +112,8 @@ export function applyLiveBoardDelta(tournament, deltaMatches) {
       })),
     })),
   };
+
+  return reResolveLiveTournament(merged);
 }
 
 /**
