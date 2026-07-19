@@ -42,23 +42,17 @@ function lockExpired(match) {
   return Date.now() - t > LOCK_TTL_MS;
 }
 
-/** Reject writes when another device holds a fresh lock. */
-export function assertWritableLock(match, lockToken) {
-  if (!match?.scoreLockId) return;
-  if (lockExpired(match)) return;
-  if (lockToken && lockToken === match.scoreLockId) return;
-  throw new MatchLockedError(match);
+/**
+ * Multi-scorer mode: do not block writes.
+ * Version CAS still protects against lost updates when two saves race.
+ */
+export function assertWritableLock(_match, _lockToken) {
+  return;
 }
 
+/** Soft claim — never rejects another scorer; just records this session. */
 export function buildLockClaimData(match, lockToken) {
   if (!lockToken) return null;
-  if (
-    match.scoreLockId &&
-    match.scoreLockId !== lockToken &&
-    !lockExpired(match)
-  ) {
-    throw new MatchLockedError(match);
-  }
   return {
     scoreLockId: lockToken,
     scoreLockedAt: new Date(),
@@ -67,8 +61,13 @@ export function buildLockClaimData(match, lockToken) {
 
 export function buildLockReleaseData(match, lockToken) {
   if (!lockToken) return null;
-  if (match.scoreLockId && match.scoreLockId !== lockToken && !lockExpired(match)) {
-    throw new MatchLockedError(match);
+  // Only clear if this session holds it (or lock already empty/expired)
+  if (
+    match.scoreLockId &&
+    match.scoreLockId !== lockToken &&
+    !lockExpired(match)
+  ) {
+    return null;
   }
   return {
     scoreLockId: null,
