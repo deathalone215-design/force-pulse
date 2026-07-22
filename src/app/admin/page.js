@@ -880,60 +880,89 @@ export default function AdminHome() {
   }
 
   if (!authenticated) {
+    const scrollFieldIntoView = (e) => {
+      // Keep email/password above the soft keyboard on phone / APK
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          e.target?.scrollIntoView?.({
+            block: "center",
+            behavior: "smooth",
+          });
+        }, 120);
+      });
+    };
+
     return (
-      <div className="flex flex-col min-h-screen bg-cream-bg text-deep-forest font-sans">
-        <header className="pitch-stripes border-b-4 border-mustard-gold/80 relative overflow-hidden py-10 safe-pad-top">
+      <div className="flex flex-col min-h-dvh bg-cream-bg text-deep-forest font-sans overflow-y-auto">
+        <header className="pitch-stripes border-b-4 border-mustard-gold/80 relative overflow-hidden py-4 sm:py-10 safe-pad-top shrink-0">
           <div className="absolute inset-0 bg-black/20 pointer-events-none" />
-          <div className="max-w-md mx-auto px-4 relative z-10 text-center space-y-3">
+          <div className="max-w-md mx-auto px-4 relative z-10 flex items-center gap-3 sm:flex-col sm:text-center sm:gap-2 sm:space-y-1">
             <img
               src="/force-pulse-logo.png"
-              alt="FORCE PULSE"
-              className="w-20 h-20 mx-auto rounded-full object-cover border-2 border-mustard-gold/60 shadow-lg bg-white"
+              alt=""
+              className="w-12 h-12 sm:w-24 sm:h-24 rounded-full object-cover border-2 border-mustard-gold/70 shadow-lg bg-white shrink-0"
             />
-            <div className="inline-flex items-center gap-2 text-mustard-gold font-mono text-[10px] font-bold uppercase tracking-widest">
-              <Lock className="w-3.5 h-3.5" />
-              Restricted
+            <div className="min-w-0 sm:space-y-2">
+              <h1 className="text-2xl sm:text-4xl font-display uppercase text-white drop-shadow leading-none">
+                FORCE PULSE
+              </h1>
+              <div className="inline-flex items-center gap-1.5 text-mustard-gold font-mono text-[10px] font-bold uppercase tracking-widest mt-1 sm:mt-0">
+                <Lock className="w-3.5 h-3.5" />
+                Admin
+              </div>
+              <p className="hidden sm:block text-sm text-white/75 font-medium">
+                Sign in with your organizer email and password.
+              </p>
             </div>
-            <h1 className="text-3xl font-display uppercase text-white drop-shadow">
-              FORCE PULSE Admin
-            </h1>
-            <p className="text-sm text-white/75 font-medium">
-              Sign in with your organizer email and password.
-            </p>
           </div>
         </header>
 
-        <main className="flex-1 flex items-start justify-center px-4 py-16">
+        <main className="flex-1 flex flex-col justify-start sm:justify-center px-4 py-5 sm:py-16 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
           <form
             onSubmit={handleLogin}
-            className="w-full max-w-sm bg-white border-2 border-dashed border-mustard-gold rounded-2xl p-6 shadow-sm space-y-5"
+            className="w-full max-w-sm mx-auto bg-white border-2 border-dashed border-mustard-gold rounded-2xl p-5 sm:p-6 shadow-sm space-y-4 sm:space-y-5"
           >
+            <p className="sm:hidden text-[11px] font-mono text-deep-forest/55 leading-relaxed">
+              Sign in with your organizer email and password.
+            </p>
             <div>
-              <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold">
+              <label
+                htmlFor="admin-login-email"
+                className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold"
+              >
                 Email
               </label>
               <input
+                id="admin-login-email"
                 type="email"
                 required
+                inputMode="email"
+                enterKeyHint="next"
                 autoComplete="username"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-cream-bg/40 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-4 py-2.5 text-sm outline-none"
+                onFocus={scrollFieldIntoView}
+                className="w-full bg-cream-bg/40 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-4 py-3 text-base sm:text-sm outline-none min-h-[48px]"
                 placeholder="you@email.com"
               />
             </div>
             <div>
-              <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold">
+              <label
+                htmlFor="admin-login-password"
+                className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold"
+              >
                 Password
               </label>
               <input
+                id="admin-login-password"
                 type="password"
                 required
-                autoFocus
+                enterKeyHint="go"
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-cream-bg/40 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-4 py-2.5 text-sm outline-none"
+                onFocus={scrollFieldIntoView}
+                className="w-full bg-cream-bg/40 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-4 py-3 text-base sm:text-sm outline-none min-h-[48px]"
                 placeholder="••••••••"
               />
             </div>
@@ -948,7 +977,7 @@ export default function AdminHome() {
             <button
               type="submit"
               disabled={loggingIn}
-              className="w-full bg-mustard-gold hover:bg-mustard-gold-hover text-deep-forest font-bold uppercase tracking-wider py-3 rounded-xl text-xs transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              className="w-full bg-mustard-gold hover:bg-mustard-gold-hover text-deep-forest font-bold uppercase tracking-wider py-3.5 rounded-xl text-xs transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 min-h-[48px]"
             >
               {loggingIn ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -964,21 +993,26 @@ export default function AdminHome() {
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-cream-bg text-deep-forest font-sans selection:bg-mustard-gold selection:text-deep-forest overflow-x-hidden relative">
-      <header className="pitch-stripes border-b-4 border-mustard-gold/80 shadow-md relative overflow-hidden py-10 safe-pad-top">
+    <div className="flex flex-col min-h-screen bg-cream-bg text-deep-forest font-sans selection:bg-mustard-gold selection:text-deep-forest overflow-x-hidden relative safe-pad-bottom">
+      <header className="pitch-stripes border-b-4 border-mustard-gold/80 shadow-md relative overflow-hidden py-4 sm:py-8 safe-pad-top">
         <div className="absolute inset-0 bg-black/15 pointer-events-none" />
 
-        <div className="max-w-6xl mx-auto px-4 relative z-10 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2 text-mustard-gold font-mono text-[10px] sm:text-xs font-bold uppercase tracking-widest">
+        <div className="max-w-6xl mx-auto px-4 relative z-10 space-y-2.5 sm:space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
+            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
               <img
                 src="/force-pulse-logo.png"
                 alt=""
-                className="w-7 h-7 rounded-full object-cover border border-mustard-gold/50 bg-white"
+                className="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-cover border border-mustard-gold/60 bg-white shrink-0"
               />
-              <span>FORCE PULSE</span>
-              <span className="text-white/60">•</span>
-              <span>Tournament Manager</span>
+              <div className="min-w-0">
+                <p className="text-base sm:text-lg font-display uppercase text-white leading-none tracking-wide">
+                  FORCE PULSE
+                </p>
+                <p className="text-[10px] font-mono font-bold uppercase tracking-widest text-mustard-gold mt-0.5">
+                  Tournament Manager
+                </p>
+              </div>
             </div>
             <button
               type="button"
@@ -990,16 +1024,18 @@ export default function AdminHome() {
           </div>
 
           {sessionUser && (
-            <p className="text-xs font-mono text-white/70">
+            <p className="text-[11px] sm:text-xs font-mono text-white/70 truncate">
               Signed in as <span className="text-mustard-gold font-bold">{sessionUser.name}</span>
-              {sessionUser.email ? ` (${sessionUser.email})` : ""}
+              <span className="hidden sm:inline">
+                {sessionUser.email ? ` (${sessionUser.email})` : ""}
+              </span>
             </p>
           )}
 
-          <h1 className="text-3xl sm:text-4xl md:text-5xl font-display uppercase tracking-normal text-white drop-shadow">
+          <h1 className="text-2xl sm:text-4xl md:text-5xl font-display uppercase tracking-normal text-white drop-shadow leading-tight">
             {isAdmin ? "Set up your tournament" : "Your tournaments"}
           </h1>
-          <p className="text-sm text-white/80 font-medium max-w-xl">
+          <p className="text-xs sm:text-sm text-white/80 font-medium max-w-xl hidden sm:block">
             {isAdmin
               ? "Create a tournament with one or more categories — each gets its own schedule."
               : "Open an assigned tournament to score matches, manage clubs, and build the schedule."}
@@ -1007,9 +1043,9 @@ export default function AdminHome() {
         </div>
       </header>
 
-      <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-8 sm:py-12 relative z-10">
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-5 sm:py-12 relative z-10">
         {isAdmin && (
-          <div className="flex gap-2 mb-8 overflow-x-auto">
+          <div className="tab-scroll mb-5 sm:mb-8 gap-2">
             {[
               { id: "tournaments", label: "Tournaments", icon: Trophy },
               { id: "users", label: "Users", icon: UserCog },
@@ -1038,11 +1074,11 @@ export default function AdminHome() {
         {isAdmin && adminTab === "users" ? (
           <UserManagement tournaments={tournaments} />
         ) : (
-        <div className={`grid grid-cols-1 gap-10 ${isAdmin ? "lg:grid-cols-3" : ""}`}>
+        <div className={`grid grid-cols-1 gap-6 sm:gap-10 ${isAdmin ? "lg:grid-cols-3" : ""}`}>
           {isAdmin && (
-          <div className="lg:col-span-1">
-            <div className="bg-white border border-slate-200 border-t-4 border-t-mustard-gold rounded-2xl p-6 shadow-sm relative overflow-hidden">
-              <div className="flex items-center gap-2 mb-6 border-b border-cream-bg pb-3">
+          <div className="lg:col-span-1 order-2 lg:order-1">
+            <div className="bg-white border border-slate-200 border-t-4 border-t-mustard-gold rounded-2xl p-4 sm:p-6 shadow-sm relative overflow-hidden">
+              <div className="flex items-center gap-2 mb-4 sm:mb-6 border-b border-cream-bg pb-3">
                 <Award className="w-5 h-5 text-mustard-gold" />
                 <h2 className="text-sm font-bold text-deep-forest tracking-wider uppercase font-mono">
                   Create Tournament
@@ -1137,7 +1173,7 @@ export default function AdminHome() {
                 <button
                   type="submit"
                   disabled={creating}
-                  className="w-full bg-mustard-gold hover:bg-mustard-gold-hover text-deep-forest font-bold uppercase tracking-wider py-3.5 rounded-xl text-xs transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 hover:-translate-y-0.5 duration-200"
+                  className="w-full bg-mustard-gold hover:bg-mustard-gold-hover text-deep-forest font-bold uppercase tracking-wider py-3.5 rounded-xl text-xs transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 hover:-translate-y-0.5 duration-200 min-h-[44px]"
                 >
                   {creating ? (
                     <>
@@ -1156,8 +1192,8 @@ export default function AdminHome() {
           </div>
           )}
 
-          <div className={isAdmin ? "lg:col-span-2 space-y-6" : "space-y-6"}>
-            <div className="flex items-center justify-between">
+          <div className={isAdmin ? "lg:col-span-2 space-y-5 sm:space-y-6 order-1 lg:order-2" : "space-y-6"}>
+            <div className="flex items-center justify-between gap-3">
               <h2 className="text-xs font-bold tracking-widest uppercase font-mono text-deep-forest/60">
                 {isAdmin ? "ACTIVE TOURNAMENTS" : "ASSIGNED TOURNAMENTS"}
               </h2>

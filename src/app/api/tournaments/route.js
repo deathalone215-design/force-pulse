@@ -5,7 +5,7 @@ import {
   parseCategoryInputs,
   sportLabel,
 } from "@/lib/sports";
-import { listLogoUrl } from "@/lib/teamLogo";
+import { preserveLogoUrl } from "@/lib/teamLogo";
 import { getAuthFromRequest, isFullAdminAuth } from "@/lib/session";
 import { requireFullAdmin } from "@/lib/accessControl";
 import {
@@ -73,7 +73,7 @@ export async function GET(request) {
       return {
         id: t.id,
         name: t.name,
-        logoUrl: listLogoUrl(t.logoUrl),
+        logoUrl: preserveLogoUrl(t.logoUrl),
         sports: [...sports],
         sportLabels: [...sports].map(sportLabel),
         startDate: t.startDate,

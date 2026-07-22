@@ -23,12 +23,9 @@ export function preserveLogoUrl(url) {
   return isRenderableLogoUrl(url) ? url : null;
 }
 
-/** List/card payloads — omit heavy data URLs; keep normal http(s) links. */
+/** List/card payloads — omit only mega banners; keep club/tournament crests. */
 export function listLogoUrl(url) {
-  if (!url || typeof url !== "string") return null;
-  if (url.startsWith("http://") || url.startsWith("https://")) return url;
-  if (url.startsWith("data:") && url.length > 2048) return null;
-  return isRenderableLogoUrl(url) ? url : null;
+  return preserveLogoUrl(url);
 }
 
 function firstPlayerLogo(team) {

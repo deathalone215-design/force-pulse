@@ -256,11 +256,11 @@ export default function PublicHome() {
             </Link>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+          <div className="flex items-center gap-3 sm:gap-4">
             <img
               src="/force-pulse-logo.png"
-              alt="FORCE PULSE"
-              className="w-14 h-14 sm:w-20 sm:h-20 rounded-full object-cover border-2 border-mustard-gold/60 shadow-lg bg-white shrink-0"
+              alt=""
+              className="w-14 h-14 sm:w-20 sm:h-20 rounded-full object-cover border-2 border-mustard-gold/70 shadow-lg bg-white shrink-0"
             />
             <h1 className="text-3xl sm:text-5xl md:text-7xl font-display uppercase tracking-normal text-white drop-shadow-lg leading-none">
               FORCE PULSE

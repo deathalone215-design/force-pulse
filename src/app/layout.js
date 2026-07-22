@@ -60,6 +60,8 @@ export const viewport = {
   maximumScale: 5,
   themeColor: "#0d472c",
   viewportFit: "cover",
+  // Android / Capacitor: shrink layout when soft keyboard opens
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({ children }) {

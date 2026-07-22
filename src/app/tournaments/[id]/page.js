@@ -1322,10 +1322,11 @@ export default function TournamentDashboard() {
         {/* Category tabs */}
         {(tournament.categories || []).length > 0 && (
           <div className="relative z-10 border-t border-white/10 py-3">
-            <div className="max-w-6xl mx-auto px-4 flex flex-wrap items-center gap-2">
-              <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-mustard-gold/80 mr-1">
+            <div className="max-w-6xl mx-auto px-4 flex items-center gap-2 min-w-0">
+              <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-mustard-gold/80 mr-1 shrink-0 hidden sm:inline">
                 Category
               </span>
+              <div className="tab-scroll flex-1 min-w-0">
               {(tournament.categories || []).map((cat) => {
                 const isActive = cat.id === activeCategory?.id;
                 return (
@@ -1350,6 +1351,7 @@ export default function TournamentDashboard() {
                   </button>
                 );
               })}
+              </div>
             </div>
           </div>
         )}

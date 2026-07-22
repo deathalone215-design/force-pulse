@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { resolveTournamentPlaceholders } from "@/lib/tournamentResolver";
-import { listLogoUrl, enrichMatchTeamSide } from "@/lib/teamLogo";
+import { preserveLogoUrl, enrichMatchTeamSide } from "@/lib/teamLogo";
 
 const playerLiteSelect = {
   id: true,
@@ -16,21 +16,21 @@ const teamLiteSelect = {
   logoUrl: true,
 };
 
-/** @deprecated Use listLogoUrl from @/lib/teamLogo */
+/** Keep logos for live/detail payloads (http + normal data URLs). */
 export function compactLogoUrl(url) {
-  return listLogoUrl(url);
+  return preserveLogoUrl(url);
 }
 
 function compactPlayer(p) {
   if (!p) return p;
-  return { ...p, logoUrl: listLogoUrl(p.logoUrl) };
+  return { ...p, logoUrl: preserveLogoUrl(p.logoUrl) };
 }
 
 function compactTeam(t) {
   if (!t) return t;
   return {
     ...t,
-    logoUrl: listLogoUrl(t.logoUrl),
+    logoUrl: preserveLogoUrl(t.logoUrl),
     players: Array.isArray(t.players)
       ? t.players.map(compactPlayer)
       : t.players,
