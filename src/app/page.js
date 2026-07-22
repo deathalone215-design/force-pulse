@@ -386,9 +386,14 @@ export default function PublicHome() {
       </main>
 
       <footer className="border-t border-slate-200 bg-white py-6">
-        <div className="max-w-6xl mx-auto px-4 text-center">
+        <div className="max-w-6xl mx-auto px-4 text-center space-y-2">
           <p className="text-[10px] font-mono text-slate-400 tracking-wider">
             © 2026 FORCE PULSE — Public live board
+          </p>
+          <p className="text-[10px] font-mono text-slate-400">
+            <Link href="/privacy" className="hover:text-deep-forest underline underline-offset-2">
+              Privacy Policy
+            </Link>
           </p>
         </div>
       </footer>
