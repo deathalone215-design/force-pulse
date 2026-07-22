@@ -1266,10 +1266,10 @@ export default function TournamentDashboard() {
   const liveMatches = categoryRounds.flatMap(r => r.matches).filter(m => m.status === "LIVE");
 
   return (
-    <div className="flex flex-col min-h-screen bg-[#FAF6EE] text-[#0a331f] font-sans selection:bg-mustard-gold selection:text-deep-forest overflow-x-hidden relative">
+    <div className="flex flex-col min-h-screen bg-[#FAF6EE] text-[#0a331f] font-sans selection:bg-mustard-gold selection:text-deep-forest overflow-x-hidden relative safe-pad-bottom">
       
       {/* Unified upper section: pitch stripes for header + categories + tabs */}
-      <div className="pitch-stripes border-b-4 border-mustard-gold/80 shadow-sm relative overflow-hidden">
+      <div className="pitch-stripes border-b-4 border-mustard-gold/80 shadow-sm relative overflow-hidden safe-pad-top">
         <div className="absolute inset-0 bg-black/15 pointer-events-none" />
 
         {/* Title bar */}
@@ -2915,7 +2915,8 @@ export default function TournamentDashboard() {
                 </div>
               ) : (
                 <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl overflow-hidden">
-                  <table className="w-full text-xs font-mono">
+                  <div className="overflow-x-auto">
+                  <table className="w-full text-xs font-mono min-w-[420px]">
                     <thead>
                       <tr className="bg-[#082e1c] text-[10px] text-white uppercase">
                         <th className="py-3 px-4">#</th>
@@ -2935,6 +2936,7 @@ export default function TournamentDashboard() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
             </div>
@@ -2948,7 +2950,8 @@ export default function TournamentDashboard() {
                 </div>
               ) : (
                 <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl overflow-hidden">
-                  <table className="w-full text-xs font-mono">
+                  <div className="overflow-x-auto">
+                  <table className="w-full text-xs font-mono min-w-[420px]">
                     <thead>
                       <tr className="bg-[#082e1c] text-[10px] text-white uppercase">
                         <th className="py-3 px-4">#</th>
@@ -2968,6 +2971,7 @@ export default function TournamentDashboard() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
             </div>
@@ -2984,7 +2988,8 @@ export default function TournamentDashboard() {
                 </div>
               ) : (
                 <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl overflow-hidden">
-                  <table className="w-full text-xs font-mono">
+                  <div className="overflow-x-auto">
+                  <table className="w-full text-xs font-mono min-w-[480px]">
                     <thead>
                       <tr className="bg-[#082e1c] text-[10px] text-white uppercase">
                         <th className="py-3 px-4">#</th>
@@ -3006,6 +3011,7 @@ export default function TournamentDashboard() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
             </div>

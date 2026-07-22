@@ -1077,9 +1077,9 @@ export default function MatchScorerPage() {
       : match.teamB?.players || [];
 
   return (
-    <div className="min-h-screen flex flex-col bg-cream-bg overflow-x-hidden">
+    <div className="min-h-screen flex flex-col bg-cream-bg overflow-x-hidden safe-pad-bottom">
       {/* Top bar */}
-      <header className="pitch-stripes border-b-2 border-mustard-gold text-white sticky top-0 z-30">
+      <header className="pitch-stripes border-b-2 border-mustard-gold text-white sticky z-30 safe-sticky-top">
         <div className="max-w-5xl mx-auto px-3 sm:px-4 py-3 sm:py-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
             <button
@@ -1187,7 +1187,7 @@ export default function MatchScorerPage() {
                     type="button"
                     disabled={updatingStatus || active}
                     onClick={() => updateMatchStatus(id)}
-                    className={`text-xs font-bold rounded-lg px-3 py-2 min-h-[40px] border cursor-pointer disabled:cursor-default transition-colors ${
+                    className={`text-xs font-bold rounded-lg px-3 py-2 min-h-[44px] border cursor-pointer disabled:cursor-default transition-colors ${
                       active
                         ? id === "LIVE"
                           ? "bg-red-600 border-red-400 text-white"
@@ -1483,7 +1483,7 @@ export default function MatchScorerPage() {
                             onClick={() =>
                               setStoppageMinutes((match.stoppageMinutes || 0) - 1)
                             }
-                            className="w-9 h-9 rounded-lg bg-[#06371d] border border-white/12 text-white text-lg font-bold cursor-pointer hover:border-mustard-gold/40 hover:bg-white/5 transition-colors"
+                            className="min-h-[44px] min-w-[44px] rounded-lg bg-[#06371d] border border-white/12 text-white text-lg font-bold cursor-pointer hover:border-mustard-gold/40 hover:bg-white/5 transition-colors"
                           >
                             −
                           </button>
@@ -1499,7 +1499,7 @@ export default function MatchScorerPage() {
                             onClick={() =>
                               setStoppageMinutes((match.stoppageMinutes || 0) + 1)
                             }
-                            className="w-9 h-9 rounded-lg bg-[#06371d] border border-white/12 text-white text-lg font-bold cursor-pointer hover:border-mustard-gold/40 hover:bg-white/5 transition-colors"
+                            className="min-h-[44px] min-w-[44px] rounded-lg bg-[#06371d] border border-white/12 text-white text-lg font-bold cursor-pointer hover:border-mustard-gold/40 hover:bg-white/5 transition-colors"
                           >
                             +
                           </button>

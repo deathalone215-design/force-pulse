@@ -226,8 +226,8 @@ export default function PublicHome() {
   );
 
   return (
-    <div className="flex flex-col min-h-screen bg-cream-bg text-deep-forest font-sans selection:bg-mustard-gold selection:text-deep-forest overflow-x-hidden relative">
-      <header className="pitch-stripes border-b-4 border-mustard-gold/80 shadow-md relative overflow-hidden min-h-[34vh] sm:min-h-[42vh] flex items-end">
+    <div className="flex flex-col min-h-screen bg-cream-bg text-deep-forest font-sans selection:bg-mustard-gold selection:text-deep-forest overflow-x-hidden relative safe-pad-bottom">
+      <header className="pitch-stripes border-b-4 border-mustard-gold/80 shadow-md relative overflow-hidden min-h-[34vh] sm:min-h-[42vh] flex items-end safe-pad-top">
         <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-black/20 to-transparent pointer-events-none" />
         <div
           className="absolute inset-0 opacity-30 pointer-events-none"
@@ -256,13 +256,13 @@ export default function PublicHome() {
             </Link>
           </div>
 
-          <div className="flex items-center gap-3 sm:gap-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
             <img
               src="/force-pulse-logo.png"
               alt="FORCE PULSE"
               className="w-14 h-14 sm:w-20 sm:h-20 rounded-full object-cover border-2 border-mustard-gold/60 shadow-lg bg-white shrink-0"
             />
-            <h1 className="text-4xl sm:text-5xl md:text-7xl font-display uppercase tracking-normal text-white drop-shadow-lg">
+            <h1 className="text-3xl sm:text-5xl md:text-7xl font-display uppercase tracking-normal text-white drop-shadow-lg leading-none">
               FORCE PULSE
             </h1>
           </div>

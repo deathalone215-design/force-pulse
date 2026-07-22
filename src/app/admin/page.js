@@ -341,10 +341,10 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
               <button
                 type="button"
                 onClick={() => removeCategory(cat)}
-                className="ml-auto p-1.5 rounded hover:bg-red-50 text-red-600 cursor-pointer"
+                className="ml-auto min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg hover:bg-red-50 text-red-600 cursor-pointer"
                 aria-label={`Remove ${cat.name}`}
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
           ))}
@@ -352,7 +352,7 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
       )}
 
       <div className="space-y-2 p-3 rounded-xl border border-dashed border-slate-300 bg-white/50">
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-col sm:flex-wrap sm:flex-row gap-2">
           <input
             id={`${idPrefix}-input`}
             type="text"
@@ -365,7 +365,7 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
               }
             }}
             placeholder="Category e.g. OPEN, U15, Singles"
-            className="flex-1 min-w-[120px] bg-cream-bg/40 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-3 py-2 text-sm text-deep-forest outline-none"
+            className="flex-1 min-w-[120px] w-full sm:w-auto bg-cream-bg/40 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-3 py-2.5 text-sm text-deep-forest outline-none min-h-[44px]"
           />
           <select
             value={draftSport}
@@ -378,7 +378,7 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
                 setDraftSetsToWin(String(d.setsToWin));
               }
             }}
-            className="bg-cream-bg/40 border border-slate-200 rounded-xl px-2 py-2 text-[10px] font-mono font-bold uppercase outline-none"
+            className="w-full sm:w-auto bg-cream-bg/40 border border-slate-200 rounded-xl px-2 py-2.5 text-[10px] font-mono font-bold uppercase outline-none min-h-[44px]"
           >
             {SPORT_OPTIONS.map((o) => (
               <option key={o.id} value={o.id}>
@@ -486,7 +486,7 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
               key={cat}
               type="button"
               onClick={() => addCategory(cat)}
-              className="px-2 py-1 rounded-md text-[9px] font-mono font-bold uppercase tracking-wider border border-dashed border-slate-300 text-deep-forest/60 hover:border-mustard-gold hover:text-deep-forest cursor-pointer"
+              className="px-3 py-2 min-h-[44px] rounded-md text-[10px] font-mono font-bold uppercase tracking-wider border border-dashed border-slate-300 text-deep-forest/60 hover:border-mustard-gold hover:text-deep-forest cursor-pointer"
             >
               + {cat}
             </button>
@@ -882,7 +882,7 @@ export default function AdminHome() {
   if (!authenticated) {
     return (
       <div className="flex flex-col min-h-screen bg-cream-bg text-deep-forest font-sans">
-        <header className="pitch-stripes border-b-4 border-mustard-gold/80 relative overflow-hidden py-10">
+        <header className="pitch-stripes border-b-4 border-mustard-gold/80 relative overflow-hidden py-10 safe-pad-top">
           <div className="absolute inset-0 bg-black/20 pointer-events-none" />
           <div className="max-w-md mx-auto px-4 relative z-10 text-center space-y-3">
             <img
@@ -965,7 +965,7 @@ export default function AdminHome() {
 
   return (
     <div className="flex flex-col min-h-screen bg-cream-bg text-deep-forest font-sans selection:bg-mustard-gold selection:text-deep-forest overflow-x-hidden relative">
-      <header className="pitch-stripes border-b-4 border-mustard-gold/80 shadow-md relative overflow-hidden py-10">
+      <header className="pitch-stripes border-b-4 border-mustard-gold/80 shadow-md relative overflow-hidden py-10 safe-pad-top">
         <div className="absolute inset-0 bg-black/15 pointer-events-none" />
 
         <div className="max-w-6xl mx-auto px-4 relative z-10 space-y-4">
@@ -1097,10 +1097,10 @@ export default function AdminHome() {
                         <button
                           type="button"
                           onClick={clearLogo}
-                          className="absolute -top-1.5 -right-1.5 p-0.5 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors cursor-pointer"
+                          className="absolute -top-2 -right-2 min-h-[44px] min-w-[44px] flex items-center justify-center bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors cursor-pointer shadow"
                           aria-label="Remove logo"
                         >
-                          <X className="w-3 h-3" />
+                          <X className="w-4 h-4" />
                         </button>
                       </div>
                       <button
@@ -1263,10 +1263,10 @@ export default function AdminHome() {
                                       if (editLogoInputRef.current)
                                         editLogoInputRef.current.value = "";
                                     }}
-                                    className="absolute -top-1.5 -right-1.5 p-0.5 bg-red-500 text-white rounded-full hover:bg-red-600 cursor-pointer"
+                                    className="absolute -top-2 -right-2 min-h-[44px] min-w-[44px] flex items-center justify-center bg-red-500 text-white rounded-full hover:bg-red-600 cursor-pointer shadow"
                                     aria-label="Remove logo"
                                   >
-                                    <X className="w-3 h-3" />
+                                    <X className="w-4 h-4" />
                                   </button>
                                 </div>
                                 <button
@@ -1392,28 +1392,28 @@ export default function AdminHome() {
                       </div>
 
                       {/* Action buttons row */}
-                      <div className={`grid gap-2 mb-4 pt-1 pl-2 ${isAdmin ? "grid-cols-4" : "grid-cols-3"}`}>
+                      <div className={`grid gap-2 mb-4 pt-1 pl-2 ${isAdmin ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-2 sm:grid-cols-3"}`}>
                         {isDone ? (
                           <Link
                             href={`/live/${t.id}`}
-                            className="flex flex-col items-center justify-center gap-1.5 py-2 px-1 bg-slate-100 hover:bg-slate-200/80 text-slate-700 rounded-xl border border-slate-300 hover:border-slate-400 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-sm"
+                            className="flex flex-col items-center justify-center gap-1.5 py-2.5 px-1 min-h-[44px] bg-slate-100 hover:bg-slate-200/80 text-slate-700 rounded-xl border border-slate-300 hover:border-slate-400 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-sm"
                             aria-label={`Results for ${t.name}`}
                             title="Tournament finished — view results"
                           >
                             <CheckCircle2 className="w-4 h-4" />
-                            <span className="text-[9px] font-mono font-bold uppercase tracking-wide">
+                            <span className="text-[10px] font-mono font-bold uppercase tracking-wide">
                               Done
                             </span>
                           </Link>
                         ) : (
                           <Link
                             href={`/live/${t.id}`}
-                            className="flex flex-col items-center justify-center gap-1.5 py-2 px-1 bg-emerald-50/40 hover:bg-emerald-50 text-emerald-800 rounded-xl border border-slate-200 hover:border-emerald-200 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-sm"
+                            className="flex flex-col items-center justify-center gap-1.5 py-2.5 px-1 min-h-[44px] bg-emerald-50/40 hover:bg-emerald-50 text-emerald-800 rounded-xl border border-slate-200 hover:border-emerald-200 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-sm"
                             aria-label={`Live board for ${t.name}`}
                             title="Public live board"
                           >
                             <Radio className="w-4 h-4" />
-                            <span className="text-[9px] font-mono font-bold uppercase tracking-wide">
+                            <span className="text-[10px] font-mono font-bold uppercase tracking-wide">
                               Live
                             </span>
                           </Link>
@@ -1422,33 +1422,33 @@ export default function AdminHome() {
                         <button
                           type="button"
                           onClick={() => startEditing(t)}
-                          className="flex flex-col items-center justify-center gap-1.5 py-2 px-1 bg-amber-50/40 hover:bg-amber-50 text-amber-800 rounded-xl border border-slate-200 hover:border-amber-200 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 cursor-pointer shadow-sm"
+                          className="flex flex-col items-center justify-center gap-1.5 py-2.5 px-1 min-h-[44px] bg-amber-50/40 hover:bg-amber-50 text-amber-800 rounded-xl border border-slate-200 hover:border-amber-200 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 cursor-pointer shadow-sm"
                           aria-label={`Edit ${t.name}`}
                           title="Edit tournament"
                         >
                           <Pencil className="w-4 h-4" />
-                          <span className="text-[9px] font-mono font-bold uppercase tracking-wide">Edit</span>
+                          <span className="text-[10px] font-mono font-bold uppercase tracking-wide">Edit</span>
                         </button>
                         )}
                         {isAdmin && (
                         <button
                           type="button"
                           onClick={() => setPendingDelete(t)}
-                          className="flex flex-col items-center justify-center gap-1.5 py-2 px-1 bg-red-50/40 hover:bg-red-50 text-red-600 rounded-xl border border-slate-200 hover:border-red-200 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 cursor-pointer shadow-sm"
+                          className="flex flex-col items-center justify-center gap-1.5 py-2.5 px-1 min-h-[44px] bg-red-50/40 hover:bg-red-50 text-red-600 rounded-xl border border-slate-200 hover:border-red-200 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 cursor-pointer shadow-sm"
                           aria-label={`Delete ${t.name}`}
                           title="Delete tournament"
                         >
                           <Trash2 className="w-4 h-4" />
-                          <span className="text-[9px] font-mono font-bold uppercase tracking-wide">Delete</span>
+                          <span className="text-[10px] font-mono font-bold uppercase tracking-wide">Delete</span>
                         </button>
                         )}
                         <Link
                           href={`/tournaments/${t.id}`}
-                          className="flex flex-col items-center justify-center gap-1.5 py-2 px-1 bg-slate-50/40 hover:bg-slate-100 text-deep-forest rounded-xl border border-slate-200 hover:border-slate-300 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-sm"
+                          className="flex flex-col items-center justify-center gap-1.5 py-2.5 px-1 min-h-[44px] bg-slate-50/40 hover:bg-slate-100 text-deep-forest rounded-xl border border-slate-200 hover:border-slate-300 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-sm"
                           aria-label={`Open ${t.name}`}
                         >
                           <ChevronRight className="w-4 h-4" />
-                          <span className="text-[9px] font-mono font-bold uppercase tracking-wide">Open</span>
+                          <span className="text-[10px] font-mono font-bold uppercase tracking-wide">Open</span>
                         </Link>
                       </div>
 

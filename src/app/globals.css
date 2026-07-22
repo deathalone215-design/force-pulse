@@ -28,6 +28,37 @@ body {
   color: var(--foreground);
   font-family: var(--font-work-sans), sans-serif;
   overflow-x: hidden;
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* Capacitor / notched phones */
+.safe-pad-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+.safe-pad-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.safe-pad-x {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+.safe-sticky-top {
+  top: env(safe-area-inset-top, 0px);
+}
+
+/* Horizontal tab / chip rows on touch devices */
+.tab-scroll {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  overscroll-behavior-x: contain;
+}
+.tab-scroll > * {
+  flex-shrink: 0;
 }
 
 /* Soften pitch stripes on narrow screens */

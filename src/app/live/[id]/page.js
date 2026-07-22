@@ -680,7 +680,8 @@ function CricketLiveCard({ match, category }) {
 
       {/* Batters table */}
       {isLive && (strikerPlayer || nonStrikerPlayer) && (
-        <div className="border-b border-slate-100">
+        <div className="border-b border-slate-100 overflow-x-auto">
+          <div className="min-w-[320px]">
           <div className="grid grid-cols-[1fr_2.2rem_2.2rem_1.8rem_1.8rem_3rem] gap-1 px-3.5 py-1.5 bg-slate-50 text-[8px] font-mono uppercase tracking-wider text-slate-400 font-bold">
             <span>Batter</span>
             <span className="text-right">R</span>
@@ -739,12 +740,14 @@ function CricketLiveCard({ match, category }) {
                 </span>
               </div>
             ))}
+          </div>
         </div>
       )}
 
       {/* Bowler row */}
       {isLive && bowlerPlayer && bowlerStats && (
-        <div className="border-b border-slate-100">
+        <div className="border-b border-slate-100 overflow-x-auto">
+          <div className="min-w-[320px]">
           <div className="grid grid-cols-[1fr_2.5rem_1.8rem_2.2rem_1.8rem_3rem] gap-1 px-3.5 py-1.5 bg-slate-50 text-[8px] font-mono uppercase tracking-wider text-slate-400 font-bold">
             <span>Bowler</span>
             <span className="text-right">O</span>
@@ -777,6 +780,7 @@ function CricketLiveCard({ match, category }) {
             <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
               {bowlerStats.economy}
             </span>
+          </div>
           </div>
         </div>
       )}
@@ -1999,15 +2003,15 @@ export default function PublicLiveBoard() {
   ];
 
   return (
-    <div className="flex flex-col min-h-screen bg-cream-bg text-deep-forest font-sans overflow-x-hidden">
-      <header className="pitch-stripes border-b-4 border-mustard-gold/80 shadow-md relative overflow-hidden py-8">
+    <div className="flex flex-col min-h-screen bg-cream-bg text-deep-forest font-sans overflow-x-hidden safe-pad-bottom">
+      <header className="pitch-stripes border-b-4 border-mustard-gold/80 shadow-md relative overflow-hidden py-8 safe-pad-top">
         <div className="absolute inset-0 bg-black/15 pointer-events-none" />
         <div className="max-w-6xl mx-auto px-4 relative z-10">
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-center gap-4 min-w-0">
               <Link
                 href="/"
-                className="p-2.5 border border-white/20 hover:border-white/40 bg-[#093c24]/80 text-white rounded-xl transition-all shrink-0"
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center border border-white/20 hover:border-white/40 bg-[#093c24]/80 text-white rounded-xl transition-all shrink-0"
               >
                 <ArrowLeft className="w-4 h-4" />
               </Link>
@@ -2070,7 +2074,7 @@ export default function PublicLiveBoard() {
       </header>
 
       {(tournament.categories || []).length > 0 && (
-        <div className="sticky top-0 z-30 bg-[#0a331f] border-b-4 border-mustard-gold shadow-md">
+        <div className="sticky z-30 bg-[#0a331f] border-b-4 border-mustard-gold shadow-md safe-sticky-top">
           <div className="max-w-6xl mx-auto px-4 py-3 sm:py-4">
             <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
               <div className="shrink-0">
@@ -2081,7 +2085,7 @@ export default function PublicLiveBoard() {
                   Switch OPEN / age group
                 </p>
               </div>
-              <div className="flex-1 grid grid-cols-2 sm:flex sm:flex-wrap gap-2 sm:gap-3">
+              <div className="flex-1 min-w-0 tab-scroll sm:flex-wrap sm:overflow-visible">
                 {(tournament.categories || []).map((cat) => {
                   const active = cat.id === activeCategory?.id;
                   const clubs = (cat.teams || []).filter((t) => !isPlaceholderTeam(t.name)).length;
@@ -2093,7 +2097,7 @@ export default function PublicLiveBoard() {
                         selectCategory(cat.id);
                         setExpandedClubId(null);
                       }}
-                      className={`relative flex items-center justify-center gap-2 px-4 sm:px-6 py-3.5 sm:py-4 rounded-xl font-display uppercase tracking-wide text-base sm:text-xl border-2 min-h-[52px] sm:min-h-[60px] cursor-pointer transition-all ${
+                      className={`relative inline-flex items-center justify-center gap-2 px-4 sm:px-6 py-3 sm:py-4 rounded-xl font-display uppercase tracking-wide text-sm sm:text-xl border-2 min-h-[44px] sm:min-h-[60px] cursor-pointer transition-all max-w-[85vw] sm:max-w-none ${
                         active
                           ? "bg-mustard-gold text-deep-forest border-mustard-gold shadow-[0_4px_0_#0a331f] scale-[1.02]"
                           : "bg-[#0d472c] text-white/85 border-white/25 hover:border-mustard-gold/70 hover:text-white"
@@ -2104,9 +2108,9 @@ export default function PublicLiveBoard() {
                           Viewing
                         </span>
                       )}
-                      <span>{categoryDisplayName(cat)}</span>
+                      <span className="truncate">{categoryDisplayName(cat)}</span>
                       <span
-                        className={`text-sm sm:text-base font-mono font-bold normal-case tracking-normal ${
+                        className={`text-sm sm:text-base font-mono font-bold normal-case tracking-normal shrink-0 ${
                           active ? "text-deep-forest/70" : "text-white/45"
                         }`}
                       >
@@ -2590,7 +2594,8 @@ export default function PublicLiveBoard() {
                 </div>
               ) : (
                 <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl overflow-hidden shadow-sm mt-4">
-                  <table className="w-full text-left text-xs font-mono">
+                  <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs font-mono min-w-[420px]">
                     <thead>
                       <tr className="bg-[#082e1c] text-[10px] text-white uppercase font-bold">
                         <th className="py-3 px-4 w-12">#</th>
@@ -2615,6 +2620,7 @@ export default function PublicLiveBoard() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
             </div>
@@ -2628,7 +2634,8 @@ export default function PublicLiveBoard() {
                 </div>
               ) : (
                 <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl overflow-hidden shadow-sm mt-4">
-                  <table className="w-full text-left text-xs font-mono">
+                  <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs font-mono min-w-[420px]">
                     <thead>
                       <tr className="bg-[#082e1c] text-[10px] text-white uppercase font-bold">
                         <th className="py-3 px-4 w-12">#</th>
@@ -2648,6 +2655,7 @@ export default function PublicLiveBoard() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
             </div>
@@ -2664,7 +2672,8 @@ export default function PublicLiveBoard() {
                 </div>
               ) : (
                 <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl overflow-hidden shadow-sm mt-4">
-                  <table className="w-full text-left text-xs font-mono">
+                  <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs font-mono min-w-[480px]">
                     <thead>
                       <tr className="bg-[#082e1c] text-[10px] text-white uppercase font-bold">
                         <th className="py-3 px-4 w-12">#</th>
@@ -2686,6 +2695,7 @@ export default function PublicLiveBoard() {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
             </div>
