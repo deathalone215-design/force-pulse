@@ -1,11 +1,14 @@
 import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 import {
   assertProductionSecrets,
-  verifyPassword,
-  getSessionToken,
+} from "@/lib/adminAuth";
+import {
   ADMIN_COOKIE,
   cookieOptions,
-} from "@/lib/adminAuth";
+  createUserSessionToken,
+} from "@/lib/session";
+import { verifyPassword as verifyUserPassword } from "@/lib/password";
 import { clientIpFromRequest, rateLimit } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
@@ -30,22 +33,66 @@ export async function POST(request) {
     }
 
     const body = await request.json();
-    const { password } = body;
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const password = body.password;
 
-    if (!verifyPassword(password)) {
-      return NextResponse.json({ error: "Invalid password" }, { status: 401 });
+    if (!email) {
+      return NextResponse.json({ error: "Email is required" }, { status: 400 });
     }
 
-    const response = NextResponse.json({ ok: true });
-    response.cookies.set(ADMIN_COOKIE, getSessionToken(), cookieOptions);
+    if (!password || typeof password !== "string") {
+      return NextResponse.json({ error: "Password is required" }, { status: 400 });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        active: true,
+        passwordHash: true,
+      },
+    });
+
+    if (!user || !user.active) {
+      return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
+    }
+
+    const valid = await verifyUserPassword(password, user.passwordHash);
+    if (!valid) {
+      return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
+    }
+
+    const token = createUserSessionToken(user);
+    const response = NextResponse.json({
+      ok: true,
+      role: user.role,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+      },
+    });
+    response.cookies.set(ADMIN_COOKIE, token, cookieOptions);
     return response;
   } catch (error) {
     console.error("Admin login failed:", error);
-    const message =
-      process.env.NODE_ENV === "production" &&
-      String(error?.message || "").includes("ADMIN_")
-        ? "Admin auth is not configured"
-        : "Login failed";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const msg = String(error?.message || "");
+    if (msg.includes("ADMIN_")) {
+      return NextResponse.json(
+        { error: "Admin auth is not configured" },
+        { status: 503 }
+      );
+    }
+    if (error?.code === "P2021" || msg.includes('"User"')) {
+      return NextResponse.json(
+        { error: "Account system not ready. Run database migration on the server." },
+        { status: 503 }
+      );
+    }
+    return NextResponse.json({ error: "Login failed" }, { status: 500 });
   }
 }

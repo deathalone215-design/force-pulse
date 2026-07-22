@@ -1,72 +1,95 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import { isPlaceholderTeam } from "@/lib/tournamentResolver";
 import {
   normalizeSport,
   parseCategoryInputs,
   sportLabel,
 } from "@/lib/sports";
+import { listLogoUrl } from "@/lib/teamLogo";
+import { getAuthFromRequest, isFullAdminAuth } from "@/lib/session";
+import { requireFullAdmin } from "@/lib/accessControl";
+import {
+  loadCategoryClubCounts,
+  loadTournamentMatchStats,
+} from "@/lib/tournamentListStats";
 
-export async function GET() {
+export async function GET(request) {
   try {
+    const auth = getAuthFromRequest(request);
+    const isManager =
+      auth?.kind === "user" && auth.role === "MANAGER" && !isFullAdminAuth(auth);
+
     const tournaments = await prisma.tournament.findMany({
+      where: isManager
+        ? { assignments: { some: { userId: auth.userId } } }
+        : undefined,
       orderBy: { createdAt: "desc" },
-      include: {
+      select: {
+        id: true,
+        name: true,
+        logoUrl: true,
+        startDate: true,
+        createdAt: true,
         categories: {
           orderBy: [{ sport: "asc" }, { name: "asc" }],
-          include: {
-            teams: {
-              select: { name: true },
-            },
-            rounds: {
-              include: {
-                matches: {
-                  select: { status: true },
-                },
-              },
-            },
+          select: {
+            id: true,
+            name: true,
+            sport: true,
+            oversPerInnings: true,
+            fullTimeMinutes: true,
+            extraTimeMinutes: true,
+            scheduleFormat: true,
           },
         },
       },
     });
 
+    const tournamentIds = tournaments.map((t) => t.id);
+    const [matchStats, clubCounts] = await Promise.all([
+      loadTournamentMatchStats(tournamentIds),
+      loadCategoryClubCounts(tournamentIds),
+    ]);
+
     const payload = tournaments.map((t) => {
-      let liveMatchCount = 0;
+      const stats = matchStats.get(t.id) || {
+        liveMatchCount: 0,
+        totalMatchCount: 0,
+        completedMatchCount: 0,
+      };
       const sports = new Set();
       const categories = t.categories.map((c) => {
         sports.add(normalizeSport(c.sport));
-        for (const round of c.rounds || []) {
-          for (const match of round.matches || []) {
-            if (match.status === "LIVE") liveMatchCount += 1;
-          }
-        }
-        const clubCount = c.teams.filter((team) => !isPlaceholderTeam(team.name))
-          .length;
-        const { teams, rounds, ...rest } = c;
         return {
-          ...rest,
+          ...c,
           sport: normalizeSport(c.sport),
           oversPerInnings: c.oversPerInnings ?? null,
           fullTimeMinutes: c.fullTimeMinutes ?? null,
           extraTimeMinutes: c.extraTimeMinutes ?? null,
-          _count: { teams: clubCount },
+          _count: { teams: clubCounts.get(c.id) || 0 },
         };
       });
 
       return {
         id: t.id,
         name: t.name,
-        logoUrl: t.logoUrl,
+        logoUrl: listLogoUrl(t.logoUrl),
         sports: [...sports],
         sportLabels: [...sports].map(sportLabel),
         startDate: t.startDate,
         createdAt: t.createdAt,
-        liveMatchCount,
+        liveMatchCount: stats.liveMatchCount,
+        totalMatchCount: stats.totalMatchCount,
+        completedMatchCount: stats.completedMatchCount,
         categories,
       };
     });
 
-    return NextResponse.json(payload);
+    return NextResponse.json(payload, {
+      headers: {
+        "Cache-Control": "public, max-age=2, s-maxage=5, stale-while-revalidate=10",
+      },
+    });
   } catch (error) {
     console.error("Failed to fetch tournaments:", error);
     return NextResponse.json({ error: "Failed to fetch tournaments" }, { status: 500 });
@@ -74,6 +97,9 @@ export async function GET() {
 }
 
 export async function POST(request) {
+  const gate = await requireFullAdmin(request);
+  if (gate.error) return gate.error;
+
   try {
     const body = await request.json();
     const { name, startDate, logoUrl, categories, sport } = body;
@@ -108,6 +134,11 @@ export async function POST(request) {
             oversPerInnings: c.oversPerInnings,
             fullTimeMinutes: c.fullTimeMinutes,
             extraTimeMinutes: c.extraTimeMinutes,
+            pointsPerSet: c.pointsPerSet,
+            setsToWin: c.setsToWin,
+            maxSets: c.maxSets,
+            lastSetPoints: c.lastSetPoints,
+            pointCap: c.pointCap,
           })),
         },
       },

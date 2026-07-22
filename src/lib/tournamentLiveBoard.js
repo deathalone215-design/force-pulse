@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { resolveTournamentPlaceholders } from "@/lib/tournamentResolver";
+import { listLogoUrl, enrichMatchTeamSide } from "@/lib/teamLogo";
 
 const playerLiteSelect = {
   id: true,
@@ -15,10 +16,32 @@ const teamLiteSelect = {
   logoUrl: true,
 };
 
+/** @deprecated Use listLogoUrl from @/lib/teamLogo */
+export function compactLogoUrl(url) {
+  return listLogoUrl(url);
+}
+
+function compactPlayer(p) {
+  if (!p) return p;
+  return { ...p, logoUrl: listLogoUrl(p.logoUrl) };
+}
+
+function compactTeam(t) {
+  if (!t) return t;
+  return {
+    ...t,
+    logoUrl: listLogoUrl(t.logoUrl),
+    players: Array.isArray(t.players)
+      ? t.players.map(compactPlayer)
+      : t.players,
+  };
+}
+
 /**
  * Lean public live-board include:
  * - squads once per team (not duplicated on every match)
  * - slim player fields only
+ * - heavy relations (events/sets) loaded; cricket balls attached only for active matches
  */
 const liveBoardCategoryInclude = {
   teams: {
@@ -45,6 +68,8 @@ const liveBoardCategoryInclude = {
           matchSets: {
             orderBy: { setNumber: "asc" },
           },
+          manOfTheMatch: { select: playerLiteSelect },
+          bestFielder: { select: playerLiteSelect },
         },
       },
     },
@@ -61,13 +86,31 @@ function attachMatchSquads(category) {
       const home = byId[match.teamAId];
       const away = byId[match.teamBId];
       if (match.teamA && home) {
-        match.teamA = { ...match.teamA, players: home.players || [] };
+        match.teamA = enrichMatchTeamSide(match.teamA, home);
       }
       if (match.teamB && away) {
-        match.teamB = { ...match.teamB, players: away.players || [] };
+        match.teamB = enrichMatchTeamSide(match.teamB, away);
+      }
+      // Strip heavy payloads from fixtures that are not being tracked
+      if (match.status === "SCHEDULED") {
+        match.events = [];
+        match.matchSets = match.matchSets?.length ? match.matchSets : [];
+        match.cricketBalls = [];
+      } else {
+        if (Array.isArray(match.events)) {
+          match.events = match.events.map((e) => ({
+            ...e,
+            player: compactPlayer(e.player),
+          }));
+        }
       }
       if (!match.cricketBalls) match.cricketBalls = [];
+      if (match.manOfTheMatch) match.manOfTheMatch = compactPlayer(match.manOfTheMatch);
+      if (match.bestFielder) match.bestFielder = compactPlayer(match.bestFielder);
     }
+  }
+  if (Array.isArray(category.teams)) {
+    category.teams = category.teams.map(compactTeam);
   }
   return category;
 }
@@ -89,7 +132,7 @@ export async function loadTournamentForLiveBoard(tournamentId) {
   const slim = {
     id: tournament.id,
     name: tournament.name,
-    logoUrl: tournament.logoUrl,
+    logoUrl: compactLogoUrl(tournament.logoUrl),
     startDate: tournament.startDate,
     createdAt: tournament.createdAt,
     serverTime: new Date().toISOString(),
@@ -100,13 +143,38 @@ export async function loadTournamentForLiveBoard(tournamentId) {
     slim.categories.map(async (cat) => {
       const withSquads = attachMatchSquads(cat);
       if (String(cat.sport || "").toUpperCase() === "CRICKET") {
+        // Only load balls for LIVE + COMPLETED (needed for leaders / live card)
         const matchIds = (withSquads.rounds || []).flatMap((r) =>
-          (r.matches || []).map((m) => m.id)
+          (r.matches || [])
+            .filter((m) => m.status === "LIVE")
+            .map((m) => m.id)
         );
         if (matchIds.length > 0) {
           const balls = await prisma.cricketBall.findMany({
             where: { matchId: { in: matchIds } },
             orderBy: { createdAt: "asc" },
+            // Skip unused wide columns for board paint
+            select: {
+              id: true,
+              matchId: true,
+              innings: true,
+              overNumber: true,
+              ballInOver: true,
+              battingTeamId: true,
+              strikerId: true,
+              nonStrikerId: true,
+              bowlerId: true,
+              runsOffBat: true,
+              extras: true,
+              extraType: true,
+              isWicket: true,
+              dismissalType: true,
+              dismissedPlayerId: true,
+              fielderId: true,
+              runsTotal: true,
+              isLegal: true,
+              createdAt: true,
+            },
           });
           const byMatch = new Map();
           for (const b of balls) {

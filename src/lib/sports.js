@@ -1,8 +1,9 @@
-import { isSetBasedSport as setBasedCheck } from "@/lib/setBasedSports";
+import { isSetBasedSport as setBasedCheck, defaultSetScoring } from "@/lib/setBasedSports";
 import {
   parseExtraTimeMinutes,
   parseFullTimeMinutes,
 } from "@/lib/footballClock";
+import { resolveTeamLogo } from "@/lib/teamLogo";
 
 /** Shared sport helpers for Force Pulse tournaments. */
 
@@ -65,6 +66,13 @@ export function entryAvatarUrl(team) {
   return p?.logoUrl || null;
 }
 
+export { resolveTeamLogo, preserveLogoUrl, isRenderableLogoUrl } from "@/lib/teamLogo";
+
+/** @deprecated Prefer resolveTeamLogo(team, category) */
+export function resolveEntryAvatar(team, category) {
+  return resolveTeamLogo(team, category);
+}
+
 export function sportLabel(sport) {
   const s = normalizeSport(sport);
   if (s === "CRICKET") return "Cricket";
@@ -88,13 +96,26 @@ export function categoryDisplayName(category) {
       extra > 0
         ? ` · ${category.fullTimeMinutes}'+${extra}`
         : ` · ${category.fullTimeMinutes}'`;
+  } else if (
+    isSetBasedSport(category.sport) &&
+    category.pointsPerSet &&
+    category.setsToWin
+  ) {
+    detail = ` · to ${category.pointsPerSet} · first to ${category.setsToWin}`;
   }
   return `${name} · ${sport}${detail}`;
 }
 
+function parsePositiveInt(value, min, max) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n) || n < min || n > max) return null;
+  return n;
+}
+
 /**
  * Normalize API category payloads.
- * Accepts string names or { name, sport, oversPerInnings, fullTimeMinutes, extraTimeMinutes }.
+ * Accepts string names or { name, sport, oversPerInnings, fullTimeMinutes, extraTimeMinutes,
+ * pointsPerSet, setsToWin, maxSets, lastSetPoints, pointCap }.
  */
 export function parseCategoryInputs(categories, fallbackSport = "FOOTBALL") {
   if (!Array.isArray(categories)) return [];
@@ -108,6 +129,11 @@ export function parseCategoryInputs(categories, fallbackSport = "FOOTBALL") {
     let oversPerInnings = null;
     let fullTimeMinutes = null;
     let extraTimeMinutes = null;
+    let pointsPerSet = null;
+    let setsToWin = null;
+    let maxSets = null;
+    let lastSetPoints = null;
+    let pointCap = null;
 
     if (typeof raw === "string") {
       name = raw.trim();
@@ -121,6 +147,25 @@ export function parseCategoryInputs(categories, fallbackSport = "FOOTBALL") {
       if (isFootballSport(sport)) {
         fullTimeMinutes = parseFullTimeMinutes(raw.fullTimeMinutes);
         extraTimeMinutes = parseExtraTimeMinutes(raw.extraTimeMinutes);
+      }
+      if (isSetBasedSport(sport)) {
+        const defaults = defaultSetScoring(sport);
+        pointsPerSet =
+          parsePositiveInt(raw.pointsPerSet, 1, 99) ?? defaults.pointsPerSet;
+        setsToWin = parsePositiveInt(raw.setsToWin, 1, 5) ?? defaults.setsToWin;
+        maxSets =
+          parsePositiveInt(raw.maxSets, setsToWin, 9) ??
+          Math.max(setsToWin * 2 - 1, setsToWin);
+        lastSetPoints =
+          parsePositiveInt(raw.lastSetPoints, 1, 99) ??
+          (sport === "VOLLEYBALL" ? defaults.lastSetPoints : pointsPerSet);
+        if (raw.pointCap === null || raw.pointCap === "") {
+          pointCap = null;
+        } else if (raw.pointCap != null) {
+          pointCap = parsePositiveInt(raw.pointCap, 1, 99);
+        } else {
+          pointCap = defaults.pointCap;
+        }
       }
     } else {
       continue;
@@ -139,6 +184,11 @@ export function parseCategoryInputs(categories, fallbackSport = "FOOTBALL") {
       }
       fullTimeMinutes = null;
       extraTimeMinutes = null;
+      pointsPerSet = null;
+      setsToWin = null;
+      maxSets = null;
+      lastSetPoints = null;
+      pointCap = null;
     } else if (isFootballSport(sport)) {
       oversPerInnings = null;
       if (fullTimeMinutes == null) {
@@ -147,10 +197,29 @@ export function parseCategoryInputs(categories, fallbackSport = "FOOTBALL") {
         );
       }
       if (extraTimeMinutes === 0) extraTimeMinutes = null;
+      pointsPerSet = null;
+      setsToWin = null;
+      maxSets = null;
+      lastSetPoints = null;
+      pointCap = null;
+    } else if (isSetBasedSport(sport)) {
+      oversPerInnings = null;
+      fullTimeMinutes = null;
+      extraTimeMinutes = null;
+      if (!pointsPerSet || !setsToWin) {
+        throw new Error(
+          `${sportLabel(sport)} category "${name}" needs points per set and sets to win`
+        );
+      }
     } else {
       oversPerInnings = null;
       fullTimeMinutes = null;
       extraTimeMinutes = null;
+      pointsPerSet = null;
+      setsToWin = null;
+      maxSets = null;
+      lastSetPoints = null;
+      pointCap = null;
     }
 
     out.push({
@@ -159,6 +228,11 @@ export function parseCategoryInputs(categories, fallbackSport = "FOOTBALL") {
       oversPerInnings,
       fullTimeMinutes,
       extraTimeMinutes,
+      pointsPerSet,
+      setsToWin,
+      maxSets,
+      lastSetPoints,
+      pointCap,
     });
   }
 

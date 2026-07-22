@@ -9,13 +9,41 @@ datasource db {
   provider  = "postgresql"
 }
 
+model User {
+  id           String                 @id @default(cuid())
+  email        String                 @unique
+  name         String
+  passwordHash String
+  role         String                 @default("MANAGER") // ADMIN | MANAGER
+  active       Boolean                @default(true)
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+  assignments  TournamentAssignment[]
+
+  @@index([role])
+}
+
+model TournamentAssignment {
+  id           String     @id @default(cuid())
+  userId       String
+  tournamentId String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@unique([userId, tournamentId])
+  @@index([userId])
+  @@index([tournamentId])
+}
+
 model Tournament {
-  id         String               @id @default(uuid())
-  name       String
-  logoUrl    String?              // Base64 logo or Supabase URL
-  startDate  DateTime
-  createdAt  DateTime             @default(now())
-  categories TournamentCategory[]
+  id          String                 @id @default(uuid())
+  name        String
+  logoUrl     String?                // Base64 logo or Supabase URL
+  startDate   DateTime
+  createdAt   DateTime               @default(now())
+  categories  TournamentCategory[]
+  assignments TournamentAssignment[]
 }
 
 model TournamentCategory {
@@ -25,13 +53,20 @@ model TournamentCategory {
   oversPerInnings  Int?       // Limited overs for cricket categories
   fullTimeMinutes  Int?       // Football match length (e.g. 20, 40, 90)
   extraTimeMinutes Int?       // Optional default +extra minutes shown at FT
-  scheduleFormat   String     @default("ROUND_ROBIN") // ROUND_ROBIN | LEAGUE | KNOCKOUT | SWISS
+  // Set-based sports (Volleyball / Badminton / Pickleball)
+  pointsPerSet     Int?       // Points to win a set/game (e.g. 21 badminton, 11 pickleball, 25 volleyball)
+  setsToWin        Int?       // Sets/games needed to win the match (e.g. 2 = best of 3)
+  maxSets          Int?       // Max sets in a match (usually 2*setsToWin - 1)
+  lastSetPoints    Int?       // Deciding-set target (e.g. volleyball 15)
+  pointCap         Int?       // Hard score cap (e.g. badminton 30)
+  scheduleFormat   String     @default("ROUND_ROBIN") // ROUND_ROBIN | LEAGUE | LEAGUE_KNOCKOUT | KNOCKOUT | SWISS
   tournamentId     String
   tournament       Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
   teams            Team[]
   rounds           Round[]
 
   @@unique([tournamentId, name, sport])
+  @@index([tournamentId])
 }
 
 model Team {
@@ -43,6 +78,8 @@ model Team {
   players    Player[]
   homeMatches Match[]            @relation("HomeTeam")
   awayMatches Match[]            @relation("AwayTeam")
+
+  @@index([categoryId])
 }
 
 model Player {
@@ -53,6 +90,8 @@ model Player {
   teamId       String
   team         Team         @relation(fields: [teamId], references: [id], onDelete: Cascade)
   matchEvents  MatchEvent[]
+  manOfTheMatchAwards Match[] @relation("ManOfTheMatch")
+  bestFielderAwards   Match[] @relation("BestFielder")
 }
 
 model Round {
@@ -62,6 +101,9 @@ model Round {
   categoryId String
   category   TournamentCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   matches    Match[]
+
+  @@index([categoryId])
+  @@index([categoryId, number])
 }
 
 model Match {
@@ -75,6 +117,7 @@ model Match {
   scoreA          Int           @default(0) // Football goals / cricket runs / sets won
   scoreB          Int           @default(0)
   status          String        @default("SCHEDULED") // SCHEDULED, LIVE, COMPLETED
+  scheduledAt     DateTime?     // Planned start time picked by admin (e.g. Final 5 PM)
   kickoffAt       DateTime?     // Football clock start (set when match goes LIVE)
   clockPausedAt   DateTime?     // When set, match clock is frozen (injury / interruption)
   pausedSeconds   Int           @default(0) // Total completed pause time subtracted from clock
@@ -99,12 +142,23 @@ model Match {
   ballsFacedA     Int           @default(0) // Legal balls only
   ballsFacedB     Int           @default(0)
   inningsComplete Int           @default(0) // 0 = none, 1 = first done, 2 = both done
+  // Match awards (cricket — Man of the Match + Best Fielder)
+  manOfTheMatchId String?
+  manOfTheMatch   Player?       @relation("ManOfTheMatch", fields: [manOfTheMatchId], references: [id], onDelete: SetNull)
+  bestFielderId   String?
+  bestFielder     Player?       @relation("BestFielder", fields: [bestFielderId], references: [id], onDelete: SetNull)
   // Set-based sports (Volleyball, Badminton, Pickleball)
   currentSet      Int           @default(1)
   servingTeamId   String?
   events          MatchEvent[]
   cricketBalls    CricketBall[]
   matchSets       MatchSet[]
+
+  @@index([status])
+  @@index([updatedAt])
+  @@index([roundId])
+  @@index([roundId, status])
+  @@index([roundId, updatedAt])
 }
 
 model MatchSet {
@@ -116,6 +170,8 @@ model MatchSet {
   scoreB    Int      @default(0)
   winnerId  String?  // teamAId, teamBId, or null if in progress
   createdAt DateTime @default(now())
+
+  @@index([matchId])
 }
 
 model MatchEvent {
@@ -128,6 +184,8 @@ model MatchEvent {
   type      String   // GOAL, OWN_GOAL, YELLOW_CARD, RED_CARD, SUB
   minute    Int?     // Minute of match
   createdAt DateTime @default(now())
+
+  @@index([matchId])
 }
 
 model CricketBall {
@@ -147,7 +205,11 @@ model CricketBall {
   isWicket          Boolean  @default(false)
   dismissalType     String?  // BOWLED | CAUGHT | LBW | RUN_OUT | STUMPED | OTHER
   dismissedPlayerId String?
+  fielderId         String?  // Catcher / run-out / stumping fielder
   runsTotal         Int      @default(0)
   isLegal           Boolean  @default(true)
   createdAt         DateTime @default(now())
+
+  @@index([matchId])
+  @@index([matchId, createdAt])
 }

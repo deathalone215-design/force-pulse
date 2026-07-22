@@ -1,6 +1,12 @@
 /** Schedule format generators for Force Pulse categories. */
 
-export const SCHEDULE_FORMATS = ["ROUND_ROBIN", "LEAGUE", "KNOCKOUT", "SWISS"];
+export const SCHEDULE_FORMATS = [
+  "ROUND_ROBIN",
+  "LEAGUE",
+  "LEAGUE_KNOCKOUT",
+  "KNOCKOUT",
+  "SWISS",
+];
 
 export function normalizeScheduleFormat(value) {
   const s = String(value || "ROUND_ROBIN").toUpperCase().trim();
@@ -11,6 +17,8 @@ export function scheduleFormatLabel(format) {
   switch (normalizeScheduleFormat(format)) {
     case "LEAGUE":
       return "League";
+    case "LEAGUE_KNOCKOUT":
+      return "League + Knockout";
     case "KNOCKOUT":
       return "Knockout";
     case "SWISS":
@@ -24,6 +32,8 @@ export function scheduleFormatHelp(format) {
   switch (normalizeScheduleFormat(format)) {
     case "LEAGUE":
       return "Same as round robin for weekend events: every club plays every other club once.";
+    case "LEAGUE_KNOCKOUT":
+      return "League stage first — every club plays every other club once. Top 4 then meet in Semi-Finals (1st vs 4th, 2nd vs 3rd) and a Final. With 3 clubs, the top 2 go straight to the Final.";
     case "KNOCKOUT":
       return "Single-elimination bracket. Byes are assigned when the club count is not a power of 2. Later rounds use Winner placeholders.";
     case "SWISS":
@@ -196,6 +206,55 @@ export function generateKnockout(teams) {
   return rounds;
 }
 
+/**
+ * League stage (single round robin) followed by knockout playoffs.
+ * - 4+ clubs: Semi-Finals (1st vs 4th, 2nd vs 3rd) then Final.
+ * - 2–3 clubs: Final between 1st and 2nd placed.
+ * Placeholder team names ("1st placed team", "Winner R{n}M{m}") are
+ * auto-created by the schedule API and resolved live from standings.
+ */
+export function generateLeagueKnockout(teams) {
+  const real = (teams || []).filter((t) => t?.id);
+  if (real.length < 2) {
+    throw new Error("You need at least 2 teams to generate a schedule.");
+  }
+
+  const rounds = generateRoundRobin(real);
+  let nextNumber = rounds.length + 1;
+
+  if (real.length >= 4) {
+    const semiNumber = nextNumber;
+    rounds.push({
+      number: semiNumber,
+      name: "Semi-Finals",
+      matches: [
+        { teamAName: "1st placed team", teamBName: "4th placed team" },
+        { teamAName: "2nd placed team", teamBName: "3rd placed team" },
+      ],
+    });
+    rounds.push({
+      number: semiNumber + 1,
+      name: "Final",
+      matches: [
+        {
+          teamAName: knockoutWinnerName(semiNumber, 1),
+          teamBName: knockoutWinnerName(semiNumber, 2),
+        },
+      ],
+    });
+  } else {
+    rounds.push({
+      number: nextNumber,
+      name: "Final",
+      matches: [
+        { teamAName: "1st placed team", teamBName: "2nd placed team" },
+      ],
+    });
+  }
+
+  return rounds;
+}
+
 function buildStandingsFromMatches(teams, completedMatches) {
   const standings = teams.map((t) => ({
     id: t.id,
@@ -329,6 +388,11 @@ export function getRoundDisplayName(number, totalRounds, format, customName) {
     return `Matchday ${n}`;
   }
 
+  // Knockout rounds carry saved names ("Semi-Finals" / "Final"); league rounds fall through.
+  if (fmt === "LEAGUE_KNOCKOUT") {
+    return `Matchday ${n}`;
+  }
+
   // Legacy hybrid seed (4 rounds)
   if (total === 4) {
     if (n === 1) return "Saturday League";
@@ -346,6 +410,7 @@ export function getRoundDisplayName(number, totalRounds, format, customName) {
 export function generateScheduleRounds(format, teams) {
   const fmt = normalizeScheduleFormat(format);
   if (fmt === "KNOCKOUT") return generateKnockout(teams);
+  if (fmt === "LEAGUE_KNOCKOUT") return generateLeagueKnockout(teams);
   if (fmt === "SWISS") {
     const round = generateSwissRound(teams, [], 1, []);
     return [round];

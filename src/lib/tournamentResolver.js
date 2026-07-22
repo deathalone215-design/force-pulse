@@ -139,14 +139,17 @@ export function resolveTournamentPlaceholders(category) {
   });
 
   // Resolve seed placeholders from group standings whenever results exist.
+  const hasLeagueResults = standings.some((s) => s.played > 0);
   placeholderTeams.forEach((t) => {
     const nameLower = (t._sourceName || t.name).toLowerCase().trim();
     if (isKnockoutWinnerPlaceholder(t._sourceName || t.name)) return;
     let resolved = null;
-    if (nameLower.includes("1st")) resolved = standings[0]?.teamObj;
-    else if (nameLower.includes("2nd")) resolved = standings[1]?.teamObj;
-    else if (nameLower.includes("3rd")) resolved = standings[2]?.teamObj;
-    else if (nameLower.includes("4th")) resolved = standings[3]?.teamObj;
+    if (hasLeagueResults) {
+      if (nameLower.includes("1st")) resolved = standings[0]?.teamObj;
+      else if (nameLower.includes("2nd")) resolved = standings[1]?.teamObj;
+      else if (nameLower.includes("3rd")) resolved = standings[2]?.teamObj;
+      else if (nameLower.includes("4th")) resolved = standings[3]?.teamObj;
+    }
     if (resolved) {
       mapping[t.id] = resolved;
     } else if (nameLower.includes("1st")) {

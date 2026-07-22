@@ -49,7 +49,7 @@ async function hmacHex(secret, message) {
     .join("");
 }
 
-async function verifySessionToken(token) {
+async function verifyLegacyAdminToken(token) {
   if (!token) return false;
   const secret = getAdminSecret();
   const password = getAdminPassword();
@@ -61,6 +61,49 @@ async function verifySessionToken(token) {
     if (token.charCodeAt(i) !== expected.charCodeAt(i)) ok = false;
   }
   return ok;
+}
+
+function base64UrlDecode(value) {
+  const padded = value + "=".repeat((4 - (value.length % 4)) % 4);
+  const binary = atob(padded.replace(/-/g, "+").replace(/_/g, "/"));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+async function verifyUserSessionToken(token) {
+  if (!token || !token.startsWith("u.")) return false;
+  const secret = getAdminSecret();
+  if (!secret) return false;
+
+  const rest = token.slice(2);
+  const dot = rest.lastIndexOf(".");
+  if (dot <= 0) return false;
+  const encoded = rest.slice(0, dot);
+  const sig = rest.slice(dot + 1);
+  if (!encoded || !sig) return false;
+
+  const expected = await hmacHex(secret, `user:${encoded}`);
+  if (sig.length !== expected.length) return false;
+  let ok = true;
+  for (let i = 0; i < sig.length; i++) {
+    if (sig.charCodeAt(i) !== expected.charCodeAt(i)) ok = false;
+  }
+  if (!ok) return false;
+
+  try {
+    const payload = JSON.parse(base64UrlDecode(encoded));
+    if (!payload?.userId || !payload?.role || !payload?.exp) return false;
+    return Date.now() <= payload.exp;
+  } catch {
+    return false;
+  }
+}
+
+async function isAuthenticated(token) {
+  if (!token) return false;
+  if (await verifyLegacyAdminToken(token)) return true;
+  return verifyUserSessionToken(token);
 }
 
 export async function middleware(request) {
@@ -78,9 +121,8 @@ export async function middleware(request) {
   }
 
   const token = request.cookies.get(ADMIN_COOKIE)?.value;
-  const isAuthed = await verifySessionToken(token);
+  const isAuthed = await isAuthenticated(token);
 
-  // Admin tournament tools require a session; public / and /live do not
   if (pathname.startsWith("/tournaments")) {
     if (!isAuthed) {
       const url = request.nextUrl.clone();
@@ -88,7 +130,6 @@ export async function middleware(request) {
       url.searchParams.set("next", pathname);
       return NextResponse.redirect(url);
     }
-    // Refresh session cookie on each admin navigation so refresh / public visits don't drop it
     const res = NextResponse.next();
     res.cookies.set(ADMIN_COOKIE, token, {
       httpOnly: true,
@@ -107,7 +148,8 @@ export async function middleware(request) {
     const isProtectedApi =
       pathname.startsWith("/api/tournaments") ||
       pathname.startsWith("/api/matches") ||
-      pathname.startsWith("/api/upload");
+      pathname.startsWith("/api/upload") ||
+      pathname.startsWith("/api/admin/users");
 
     if (isProtectedApi && !isAuthed) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -123,5 +165,7 @@ export const config = {
     "/api/tournaments/:path*",
     "/api/matches/:path*",
     "/api/upload",
+    "/api/admin/users",
+    "/api/admin/users/:path*",
   ],
 };

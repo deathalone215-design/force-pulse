@@ -15,6 +15,8 @@ import {
   ballDisplayLabel,
   ballDisplayColor,
   oversToMaxBalls,
+  computeRunsTotal,
+  isLegalExtra,
 } from "@/lib/cricket";
 import { Loader2, Undo2, Zap, Target, TrendingUp } from "lucide-react";
 import {
@@ -90,12 +92,14 @@ export default function CricketScorer({
   const [bowlerId, setBowlerId] = useState(match.bowlerId || "");
   const [dismissalType, setDismissalType] = useState("BOWLED");
   const [dismissedPlayerId, setDismissedPlayerId] = useState("");
+  const [fielderId, setFielderId] = useState("");
   const [extraRuns, setExtraRuns] = useState(1);
   const [wicketRuns, setWicketRuns] = useState(0);
   const [newBatsmanId, setNewBatsmanId] = useState("");
   const [newBowlerId, setNewBowlerId] = useState("");
   const [showMatchStatus, setShowMatchStatus] = useState(false);
   const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [savingAward, setSavingAward] = useState(false);
 
   const teamA = match.teamA;
   const teamB = match.teamB;
@@ -104,6 +108,11 @@ export default function CricketScorer({
   const bowlingTeam = activeBatId === teamA?.id ? teamB : teamA;
   const batPlayers = battingTeam?.players || [];
   const bowlPlayers = bowlingTeam?.players || [];
+  const allMatchPlayers = useMemo(
+    () => [...(teamA?.players || []), ...(teamB?.players || [])],
+    [teamA?.players, teamB?.players]
+  );
+  const needsFielder = ["CAUGHT", "RUN_OUT", "STUMPED"].includes(dismissalType);
 
   const allBalls = useMemo(() => match.cricketBalls || [], [match.cricketBalls]);
   const inningsBalls = useMemo(
@@ -235,14 +244,71 @@ export default function CricketScorer({
   };
 
   const scoreBall = async (payload) => {
-    if (needsNewBatsman || needsNewBowler || needsSecondInnings || needsStart) { alert("Finish setup first"); return; }
-    try { await api(`/api/matches/${matchId}/cricket/ball`, { method: "POST", body: JSON.stringify(payload) }); }
-    catch (err) { alert(err.message); }
+    if (needsNewBatsman || needsNewBowler || needsSecondInnings || needsStart) {
+      alert("Finish setup first");
+      return;
+    }
+    // Instant score bump — server response reconciles full ball log
+    if (onMatchUpdate && match.battingTeamId) {
+      const isA = match.battingTeamId === match.teamAId;
+      const runs = computeRunsTotal(payload);
+      const legal = isLegalExtra(payload.extraType);
+      const isWicket = !!payload.isWicket;
+      const patch = isA
+        ? {
+            scoreA: (match.scoreA || 0) + runs,
+            wicketsA: (match.wicketsA || 0) + (isWicket ? 1 : 0),
+            ballsFacedA: (match.ballsFacedA || 0) + (legal ? 1 : 0),
+          }
+        : {
+            scoreB: (match.scoreB || 0) + runs,
+            wicketsB: (match.wicketsB || 0) + (isWicket ? 1 : 0),
+            ballsFacedB: (match.ballsFacedB || 0) + (legal ? 1 : 0),
+          };
+      if (isWicket && !payload.newStrikerId) {
+        patch.strikerId = null;
+      }
+      onMatchUpdate(patch);
+    }
+    try {
+      await api(`/api/matches/${matchId}/cricket/ball`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      alert(err.message);
+      if (onRefresh) await onRefresh();
+    }
   };
 
   const undoLast = async () => {
     try { await api(`/api/matches/${matchId}/cricket/ball`, { method: "DELETE" }); }
     catch (err) { alert(err.message); }
+  };
+
+  const saveAward = async (fields) => {
+    setSavingAward(true);
+    try {
+      const res = await fetch(`/api/matches/${matchId}/awards`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ ...fields, ...casFields(match, matchId) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (isCasConflict(res, data) && data?.id && onMatchUpdate) {
+          onMatchUpdate(data);
+        }
+        throw new Error(casErrorMessage(res, data, "Failed to save award"));
+      }
+      if (onMatchUpdate) onMatchUpdate(data);
+      else if (onRefresh) await onRefresh();
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSavingAward(false);
+    }
   };
 
   const updateStatus = async (s) => {
@@ -608,8 +674,28 @@ export default function CricketScorer({
                   return <option key={id} value={id}>{playerLabel(p)}</option>;
                 })}
               </select>
-              <button type="button" disabled={busy}
-                onClick={() => scoreBall({ runsOffBat: wicketRuns, extras: 0, extraType: null, isWicket: true, dismissalType, dismissedPlayerId: dismissedPlayerId || match.strikerId })}
+              {needsFielder && (
+                <select
+                  value={fielderId}
+                  onChange={(e) => setFielderId(e.target.value)}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-xs outline-none"
+                >
+                  <option value="">Fielder (catch / run-out / stump)</option>
+                  {bowlPlayers.map((p) => (
+                    <option key={p.id} value={p.id}>{playerLabel(p)}</option>
+                  ))}
+                </select>
+              )}
+              <button type="button" disabled={busy || (needsFielder && !fielderId)}
+                onClick={() => scoreBall({
+                  runsOffBat: wicketRuns,
+                  extras: 0,
+                  extraType: null,
+                  isWicket: true,
+                  dismissalType,
+                  dismissedPlayerId: dismissedPlayerId || match.strikerId,
+                  fielderId: needsFielder ? fielderId || null : null,
+                })}
                 className="w-full py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white text-[10px] font-mono font-bold uppercase cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2">
                 <Zap className="w-3.5 h-3.5" /> Record wicket
               </button>
@@ -618,18 +704,71 @@ export default function CricketScorer({
         </section>
       )}
 
-      {/* ── MATCH COMPLETE ── */}
+      {/* ── MATCH COMPLETE + AWARDS ── */}
       {match.status === "COMPLETED" && (
-        <section className="bg-white border-2 border-mustard-gold rounded-2xl p-5 text-center">
-          <p className="text-[10px] font-mono font-bold uppercase tracking-widest text-deep-forest/50 mb-2">Match complete</p>
-          <p className="text-xl font-display uppercase text-deep-forest">
-            {match.scoreA === match.scoreB ? "Tied" : match.scoreA > match.scoreB ? `${teamA?.name} won` : `${teamB?.name} won`}
-          </p>
-          <p className="text-xs font-mono text-deep-forest/60 mt-2">
-            {teamA?.name} {match.scoreA}/{match.wicketsA} ({ballsToOvers(match.ballsFacedA)})
-            &nbsp;vs&nbsp;
-            {teamB?.name} {match.scoreB}/{match.wicketsB} ({ballsToOvers(match.ballsFacedB)})
-          </p>
+        <section className="bg-white border-2 border-mustard-gold rounded-2xl p-5 space-y-5">
+          <div className="text-center">
+            <p className="text-[10px] font-mono font-bold uppercase tracking-widest text-deep-forest/50 mb-2">Match complete</p>
+            <p className="text-xl font-display uppercase text-deep-forest">
+              {match.scoreA === match.scoreB ? "Tied" : match.scoreA > match.scoreB ? `${teamA?.name} won` : `${teamB?.name} won`}
+            </p>
+            <p className="text-xs font-mono text-deep-forest/60 mt-2">
+              {teamA?.name} {match.scoreA}/{match.wicketsA} ({ballsToOvers(match.ballsFacedA)})
+              &nbsp;vs&nbsp;
+              {teamB?.name} {match.scoreB}/{match.wicketsB} ({ballsToOvers(match.ballsFacedB)})
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-dashed border-mustard-gold/50 pt-4">
+            <label className="block space-y-1.5 text-left">
+              <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-deep-forest/55">
+                Man of the Match
+              </span>
+              <select
+                value={match.manOfTheMatchId || ""}
+                disabled={savingAward}
+                onChange={(e) => saveAward({ manOfTheMatchId: e.target.value || null })}
+                className="w-full bg-cream-bg border border-slate-200 focus:border-mustard-gold rounded-xl px-3 py-2.5 text-xs outline-none min-h-[44px] disabled:opacity-60"
+              >
+                <option value="">Select player…</option>
+                {allMatchPlayers.map((p) => (
+                  <option key={p.id} value={p.id}>{playerLabel(p)} · {p.teamId === teamA?.id ? teamA?.name : teamB?.name}</option>
+                ))}
+              </select>
+              {match.manOfTheMatch && (
+                <p className="text-[10px] font-mono text-mustard-gold font-bold">
+                  ★ {match.manOfTheMatch.name}
+                </p>
+              )}
+            </label>
+
+            <label className="block space-y-1.5 text-left">
+              <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-deep-forest/55">
+                Best Fielder
+              </span>
+              <select
+                value={match.bestFielderId || ""}
+                disabled={savingAward}
+                onChange={(e) => saveAward({ bestFielderId: e.target.value || null })}
+                className="w-full bg-cream-bg border border-slate-200 focus:border-mustard-gold rounded-xl px-3 py-2.5 text-xs outline-none min-h-[44px] disabled:opacity-60"
+              >
+                <option value="">Select player…</option>
+                {allMatchPlayers.map((p) => (
+                  <option key={p.id} value={p.id}>{playerLabel(p)} · {p.teamId === teamA?.id ? teamA?.name : teamB?.name}</option>
+                ))}
+              </select>
+              {match.bestFielder && (
+                <p className="text-[10px] font-mono text-mustard-gold font-bold">
+                  ★ {match.bestFielder.name}
+                </p>
+              )}
+            </label>
+          </div>
+          {savingAward && (
+            <div className="flex justify-center">
+              <Loader2 className="w-4 h-4 animate-spin text-mustard-gold" />
+            </div>
+          )}
         </section>
       )}
 

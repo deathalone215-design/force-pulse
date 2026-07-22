@@ -350,6 +350,7 @@ export function calculateCricketStandings(category) {
 export function calculateCricketLeaders(category) {
   const runs = {};
   const wickets = {};
+  const fielders = {};
 
   const allPlayers = {};
   (category?.teams || []).forEach((t) => {
@@ -357,6 +358,25 @@ export function calculateCricketLeaders(category) {
       allPlayers[p.id] = { ...p, teamName: t.name, teamLogoUrl: t.logoUrl || null };
     });
   });
+
+  const ensureFielder = (playerId) => {
+    if (!fielders[playerId]) {
+      const p = allPlayers[playerId];
+      fielders[playerId] = {
+        id: playerId,
+        name: p?.name || "Unknown",
+        shirtNumber: p?.shirtNumber,
+        logoUrl: p?.logoUrl || null,
+        teamName: p?.teamName || "Unknown",
+        teamLogoUrl: p?.teamLogoUrl || null,
+        dismissals: 0,
+        awards: 0,
+      };
+    }
+    return fielders[playerId];
+  };
+
+  const FIELDING_DISMISSALS = new Set(["CAUGHT", "RUN_OUT", "STUMPED"]);
 
   (category?.rounds || []).forEach((round) => {
     (round.matches || []).forEach((match) => {
@@ -391,7 +411,17 @@ export function calculateCricketLeaders(category) {
           }
           wickets[ball.bowlerId].wickets += 1;
         }
+        if (
+          ball.isWicket &&
+          ball.fielderId &&
+          FIELDING_DISMISSALS.has(ball.dismissalType || "")
+        ) {
+          ensureFielder(ball.fielderId).dismissals += 1;
+        }
       });
+      if (match.bestFielderId) {
+        ensureFielder(match.bestFielderId).awards += 1;
+      }
     });
   });
 
@@ -399,6 +429,12 @@ export function calculateCricketLeaders(category) {
     runScorers: Object.values(runs).sort((a, b) => b.runs - a.runs || a.name.localeCompare(b.name)),
     wicketTakers: Object.values(wickets).sort(
       (a, b) => b.wickets - a.wickets || a.name.localeCompare(b.name)
+    ),
+    bestFielders: Object.values(fielders).sort(
+      (a, b) =>
+        b.dismissals - a.dismissals ||
+        b.awards - a.awards ||
+        a.name.localeCompare(b.name)
     ),
   };
 }

@@ -3,6 +3,7 @@ import {
   isPlaceholderTeam,
   resolveTournamentPlaceholders,
 } from "@/lib/tournamentResolver";
+import { preserveLogoUrl } from "@/lib/teamLogo";
 
 /** Prefer squads already attached on the live board. */
 function mergeTeam(localTeam, incomingTeam) {
@@ -15,6 +16,7 @@ function mergeTeam(localTeam, incomingTeam) {
   ) {
     return {
       ...localTeam,
+      logoUrl: localTeam.logoUrl || preserveLogoUrl(incomingTeam.logoUrl),
       players: localTeam.players?.length
         ? localTeam.players
         : incomingTeam.players,
@@ -22,6 +24,7 @@ function mergeTeam(localTeam, incomingTeam) {
   }
   return {
     ...incomingTeam,
+    logoUrl: preserveLogoUrl(incomingTeam.logoUrl) || localTeam?.logoUrl || null,
     players: incomingTeam.players?.length
       ? incomingTeam.players
       : localTeam?.players,
@@ -36,11 +39,51 @@ export function mergeLiveMatch(local, incoming) {
   if (!incoming) return local;
   if (!local) return incoming;
 
+  const incomingVer = Number(incoming.version) || 0;
+  const localVer = Number(local.version) || 0;
+  const fresherByVersion = incomingVer >= localVer;
+
   if (!shouldAcceptServerMatch(local, incoming)) {
+    // updatedAt lost the race — still absorb score/log fields when version is newer
     return {
       ...local,
       teamA: mergeTeam(local.teamA, incoming.teamA),
       teamB: mergeTeam(local.teamB, incoming.teamB),
+      ...(fresherByVersion
+        ? {
+            scoreA: incoming.scoreA ?? local.scoreA,
+            scoreB: incoming.scoreB ?? local.scoreB,
+            wicketsA: incoming.wicketsA ?? local.wicketsA,
+            wicketsB: incoming.wicketsB ?? local.wicketsB,
+            ballsFacedA: incoming.ballsFacedA ?? local.ballsFacedA,
+            ballsFacedB: incoming.ballsFacedB ?? local.ballsFacedB,
+            penaltyScoreA: incoming.penaltyScoreA ?? local.penaltyScoreA,
+            penaltyScoreB: incoming.penaltyScoreB ?? local.penaltyScoreB,
+            status: incoming.status ?? local.status,
+            currentInnings: incoming.currentInnings ?? local.currentInnings,
+            battingTeamId: incoming.battingTeamId ?? local.battingTeamId,
+            strikerId: incoming.strikerId !== undefined ? incoming.strikerId : local.strikerId,
+            nonStrikerId:
+              incoming.nonStrikerId !== undefined
+                ? incoming.nonStrikerId
+                : local.nonStrikerId,
+            bowlerId: incoming.bowlerId !== undefined ? incoming.bowlerId : local.bowlerId,
+            version: incoming.version ?? local.version,
+            updatedAt: incoming.updatedAt || local.updatedAt,
+          }
+        : {}),
+      events:
+        fresherByVersion && Array.isArray(incoming.events)
+          ? incoming.events
+          : local.events,
+      cricketBalls:
+        fresherByVersion && Array.isArray(incoming.cricketBalls)
+          ? incoming.cricketBalls
+          : local.cricketBalls,
+      matchSets:
+        fresherByVersion && Array.isArray(incoming.matchSets)
+          ? incoming.matchSets
+          : local.matchSets,
     };
   }
 

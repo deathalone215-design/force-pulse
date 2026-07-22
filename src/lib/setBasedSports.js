@@ -36,11 +36,69 @@ export const SPORT_CONFIGS = {
 };
 
 export function isSetBasedSport(sport) {
-  return SET_BASED_SPORTS.includes(sport);
+  return SET_BASED_SPORTS.includes(String(sport || "").toUpperCase().trim());
 }
 
-export function getConfig(sport) {
-  return SPORT_CONFIGS[sport] || null;
+export function getConfig(sport, category = null) {
+  const base = SPORT_CONFIGS[normalizeSportKey(sport)];
+  if (!base) return null;
+  if (!category) return { ...base };
+
+  const pointsPerSet =
+    Number.isFinite(parseInt(category.pointsPerSet, 10)) &&
+    parseInt(category.pointsPerSet, 10) > 0
+      ? parseInt(category.pointsPerSet, 10)
+      : base.pointsPerSet;
+  const setsToWin =
+    Number.isFinite(parseInt(category.setsToWin, 10)) &&
+    parseInt(category.setsToWin, 10) > 0
+      ? parseInt(category.setsToWin, 10)
+      : base.setsToWin;
+  const maxSetsRaw = parseInt(category.maxSets, 10);
+  const maxSets =
+    Number.isFinite(maxSetsRaw) && maxSetsRaw >= setsToWin
+      ? maxSetsRaw
+      : Math.max(setsToWin * 2 - 1, setsToWin);
+  const lastSetRaw = parseInt(category.lastSetPoints, 10);
+  const lastSetPoints =
+    Number.isFinite(lastSetRaw) && lastSetRaw > 0
+      ? lastSetRaw
+      : category.pointsPerSet != null
+        ? pointsPerSet
+        : base.lastSetPoints;
+  const capRaw = category.pointCap;
+  const pointCap =
+    capRaw === null || capRaw === ""
+      ? null
+      : Number.isFinite(parseInt(capRaw, 10)) && parseInt(capRaw, 10) > 0
+        ? parseInt(capRaw, 10)
+        : base.pointCap;
+
+  return {
+    ...base,
+    pointsPerSet,
+    setsToWin,
+    maxSets,
+    lastSetPoints,
+    pointCap,
+  };
+}
+
+function normalizeSportKey(sport) {
+  return String(sport || "").toUpperCase().trim();
+}
+
+/** Defaults used when creating a set-based category in admin. */
+export function defaultSetScoring(sport) {
+  const base = SPORT_CONFIGS[normalizeSportKey(sport)];
+  if (!base) return null;
+  return {
+    pointsPerSet: base.pointsPerSet,
+    setsToWin: base.setsToWin,
+    maxSets: base.maxSets,
+    lastSetPoints: base.lastSetPoints,
+    pointCap: base.pointCap,
+  };
 }
 
 export function getSetTarget(setNumber, config) {

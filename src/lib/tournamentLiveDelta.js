@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { preserveLogoUrl, enrichMatchTeamSide } from "@/lib/teamLogo";
 
 const playerLiteSelect = {
   id: true,
@@ -38,20 +39,33 @@ const liveMatchInclude = {
   },
 };
 
-function attachSquadsToMatch(match, categoryTeams) {
+function compactPlayer(p) {
+  if (!p) return p;
+  return { ...p, logoUrl: preserveLogoUrl(p.logoUrl) };
+}
+
+function attachSquadsToMatch(match, categoryTeams, { needSquads }) {
   const byId = Object.fromEntries(
     (categoryTeams || []).map((t) => [t.id, t])
   );
   const home = byId[match.teamAId];
   const away = byId[match.teamBId];
   const next = { ...match };
-  if (next.teamA && home) {
-    next.teamA = { ...next.teamA, players: home.players || [] };
+  if (next.teamA) {
+    next.teamA = enrichMatchTeamSide(next.teamA, home);
+    next.teamA.players = needSquads ? (home?.players || []).map(compactPlayer) : [];
   }
-  if (next.teamB && away) {
-    next.teamB = { ...next.teamB, players: away.players || [] };
+  if (next.teamB) {
+    next.teamB = enrichMatchTeamSide(next.teamB, away);
+    next.teamB.players = needSquads ? (away?.players || []).map(compactPlayer) : [];
   }
   if (!next.cricketBalls) next.cricketBalls = [];
+  if (Array.isArray(next.events)) {
+    next.events = next.events.map((e) => ({
+      ...e,
+      player: compactPlayer(e.player),
+    }));
+  }
   return next;
 }
 
@@ -59,15 +73,10 @@ function attachSquadsToMatch(match, categoryTeams) {
  * Incremental live-board updates: changed matches since `since`, plus all LIVE.
  */
 export async function loadLiveBoardDelta(tournamentId, sinceIso) {
-  const exists = await prisma.tournament.findUnique({
-    where: { id: tournamentId },
-    select: { id: true },
-  });
-  if (!exists) return null;
-
   const since = sinceIso ? new Date(sinceIso) : null;
   const sinceOk = since && Number.isFinite(since.getTime());
 
+  // Single query — no separate tournament existence round-trip
   const matches = await prisma.match.findMany({
     where: {
       round: { category: { tournamentId } },
@@ -78,15 +87,36 @@ export async function loadLiveBoardDelta(tournamentId, sinceIso) {
     },
     include: liveMatchInclude,
     orderBy: { updatedAt: "asc" },
+    take: 80,
   });
 
-  const categoryIds = [
-    ...new Set(matches.map((m) => m.round?.categoryId).filter(Boolean)),
+  // Empty + no prior since → still confirm tournament exists
+  if (matches.length === 0) {
+    const exists = await prisma.tournament.findUnique({
+      where: { id: tournamentId },
+      select: { id: true },
+    });
+    if (!exists) return null;
+    return {
+      tournamentId,
+      serverTime: new Date().toISOString(),
+      matches: [],
+    };
+  }
+
+  const needSquadCategoryIds = [
+    ...new Set(
+      matches
+        .filter((m) => m.status === "LIVE")
+        .map((m) => m.round?.categoryId)
+        .filter(Boolean)
+    ),
   ];
+
   const categories =
-    categoryIds.length > 0
+    needSquadCategoryIds.length > 0
       ? await prisma.tournamentCategory.findMany({
-          where: { id: { in: categoryIds } },
+          where: { id: { in: needSquadCategoryIds } },
           include: {
             teams: {
               include: {
@@ -105,10 +135,17 @@ export async function loadLiveBoardDelta(tournamentId, sinceIso) {
 
   const payload = matches.map((m) => {
     const categoryId = m.round?.categoryId;
+    const needSquads = m.status === "LIVE";
     const withSquads = attachSquadsToMatch(
       m,
-      teamsByCategory[categoryId] || []
+      teamsByCategory[categoryId] || [],
+      { needSquads }
     );
+    // SCHEDULED deltas shouldn't ship ball logs
+    if (m.status === "SCHEDULED") {
+      withSquads.cricketBalls = [];
+      withSquads.events = [];
+    }
     const { round, ...rest } = withSquads;
     return {
       ...rest,

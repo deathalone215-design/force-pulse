@@ -1,9 +1,13 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { requireTournamentAccess } from "@/lib/accessControl";
 
 export async function POST(request, { params }) {
+  const { id: tournamentId } = await params;
+  const gate = await requireTournamentAccess(request, tournamentId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: tournamentId } = await params;
     const body = await request.json();
     const { name, logoUrl, players, categoryId } = body;
 

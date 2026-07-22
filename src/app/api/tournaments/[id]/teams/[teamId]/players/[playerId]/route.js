@@ -1,9 +1,13 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { requireTournamentAccess } from "@/lib/accessControl";
 
 export async function PATCH(request, { params }) {
+  const { id: tournamentId, teamId, playerId } = await params;
+  const gate = await requireTournamentAccess(request, tournamentId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: tournamentId, teamId, playerId } = await params;
     const body = await request.json();
     const { name, shirtNumber, logoUrl } = body;
 
@@ -47,9 +51,11 @@ export async function PATCH(request, { params }) {
 }
 
 export async function DELETE(request, { params }) {
-  try {
-    const { id: tournamentId, teamId, playerId } = await params;
+  const { id: tournamentId, teamId, playerId } = await params;
+  const gate = await requireTournamentAccess(request, tournamentId);
+  if (gate.error) return gate.error;
 
+  try {
     const player = await prisma.player.findFirst({
       where: {
         id: playerId,

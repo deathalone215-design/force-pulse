@@ -19,6 +19,7 @@ import {
   parseExpectedVersion,
   parseLockToken,
 } from "@/lib/matchCas";
+import { requireMatchAccess } from "@/lib/accessControl";
 
 function loadMatch(matchId) {
   return prisma.match.findUnique({
@@ -37,8 +38,11 @@ function loadMatch(matchId) {
 }
 
 export async function POST(request, { params }) {
+  const { id: matchId } = await params;
+  const gate = await requireMatchAccess(request, matchId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: matchId } = await params;
     const body = await request.json();
     const expectedVersion = parseExpectedVersion(body);
     const lockToken = parseLockToken(body);
@@ -49,6 +53,7 @@ export async function POST(request, { params }) {
       isWicket = false,
       dismissalType = null,
       dismissedPlayerId = null,
+      fielderId = null,
       newStrikerId = null, // after wicket
     } = body;
 
@@ -119,6 +124,12 @@ export async function POST(request, { params }) {
       dismissedId = match.strikerId;
     }
 
+    const fieldingTypes = new Set(["CAUGHT", "RUN_OUT", "STUMPED"]);
+    const resolvedFielderId =
+      isWicket && fieldingTypes.has(dismissalType || "")
+        ? fielderId || null
+        : null;
+
     const result = await prisma.$transaction(async (tx) => {
       const ball = await tx.cricketBall.create({
         data: {
@@ -136,6 +147,7 @@ export async function POST(request, { params }) {
           isWicket: !!isWicket,
           dismissalType: isWicket ? dismissalType || "OTHER" : null,
           dismissedPlayerId: isWicket ? dismissedId : null,
+          fielderId: resolvedFielderId,
           runsTotal,
           isLegal: legal,
         },
@@ -243,8 +255,11 @@ export async function POST(request, { params }) {
 }
 
 export async function DELETE(request, { params }) {
+  const { id: matchId } = await params;
+  const gate = await requireMatchAccess(request, matchId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: matchId } = await params;
     const { searchParams } = new URL(request.url);
     let ballId = searchParams.get("ballId");
     let expectedVersion = searchParams.get("expectedVersion");

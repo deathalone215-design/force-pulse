@@ -7,11 +7,15 @@ import {
   parseExpectedVersion,
   parseLockToken,
 } from "@/lib/matchCas";
+import { requireMatchAccess } from "@/lib/accessControl";
 
 /** PATCH: set new batsman after wicket and/or change bowler */
 export async function PATCH(request, { params }) {
+  const { id: matchId } = await params;
+  const gate = await requireMatchAccess(request, matchId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: matchId } = await params;
     const body = await request.json();
     const { strikerId, nonStrikerId, bowlerId } = body;
     const expectedVersion = parseExpectedVersion(body);

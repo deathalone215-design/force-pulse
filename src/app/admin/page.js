@@ -20,9 +20,15 @@ import {
   Lock,
   LogOut,
   Trash2,
+  CheckCircle2,
+  UserCog,
 } from "lucide-react";
 import { uploadImageToSupabase } from "@/lib/imageUpload";
-import { categoryDisplayName, sportLabel } from "@/lib/sports";
+import { categoryDisplayName, sportLabel, isSetBasedSport } from "@/lib/sports";
+import { defaultSetScoring } from "@/lib/setBasedSports";
+import { isTournamentComplete } from "@/lib/tournamentDate";
+import UserManagement from "./UserManagement";
+import { useSequentialPoll } from "@/hooks/useSequentialPoll";
 
 const SUGGESTED_CATEGORIES = ["U12", "U13", "U14", "U15", "U16", "U18", "OPEN"];
 const SPORT_OPTIONS = [
@@ -55,22 +61,41 @@ function categoryKey(c) {
   return `${(c.sport || "FOOTBALL").toUpperCase()}::${(c.name || "").toLowerCase()}`;
 }
 
-/** Rows: { name, sport, oversPerInnings, fullTimeMinutes, extraTimeMinutes } */
+/** Rows: { name, sport, oversPerInnings, fullTimeMinutes, extraTimeMinutes, pointsPerSet, setsToWin, ... } */
 function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
   const [draftName, setDraftName] = useState("");
   const [draftSport, setDraftSport] = useState("FOOTBALL");
   const [draftOvers, setDraftOvers] = useState("20");
   const [draftFullTime, setDraftFullTime] = useState("20");
   const [draftExtra, setDraftExtra] = useState("0");
+  const [draftPoints, setDraftPoints] = useState("21");
+  const [draftSetsToWin, setDraftSetsToWin] = useState("2");
 
   const normalize = (name) => name.trim().replace(/\s+/g, " ");
+
+  const setScoringForSport = (sportId, points, sets) => {
+    const defaults = defaultSetScoring(sportId);
+    if (!defaults) return {};
+    const pointsPerSet = parseInt(points, 10) || defaults.pointsPerSet;
+    const setsToWin = parseInt(sets, 10) || defaults.setsToWin;
+    return {
+      pointsPerSet,
+      setsToWin,
+      maxSets: Math.max(setsToWin * 2 - 1, setsToWin),
+      lastSetPoints:
+        sportId === "VOLLEYBALL" ? defaults.lastSetPoints : pointsPerSet,
+      pointCap: defaults.pointCap,
+    };
+  };
 
   const addCategory = (
     rawName,
     sport = draftSport,
     overs = draftOvers,
     fullTime = draftFullTime,
-    extra = draftExtra
+    extra = draftExtra,
+    points = draftPoints,
+    sets = draftSetsToWin
   ) => {
     const name = normalize(rawName);
     if (!name) return;
@@ -78,12 +103,14 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
     const row = {
       name,
       sport: sportId,
-      oversPerInnings:
-        sportId === "CRICKET" ? parseInt(overs, 10) || 20 : null,
-      fullTimeMinutes:
-        sportId === "FOOTBALL" ? parseInt(fullTime, 10) || 20 : null,
-      extraTimeMinutes:
-        sportId === "FOOTBALL" ? Math.max(0, parseInt(extra, 10) || 0) : null,
+      oversPerInnings: null,
+      fullTimeMinutes: null,
+      extraTimeMinutes: null,
+      pointsPerSet: null,
+      setsToWin: null,
+      maxSets: null,
+      lastSetPoints: null,
+      pointCap: null,
     };
     if (selected.some((c) => categoryKey(c) === categoryKey(row))) {
       setDraftName("");
@@ -96,10 +123,7 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
         return;
       }
       row.oversPerInnings = ov;
-      row.fullTimeMinutes = null;
-      row.extraTimeMinutes = null;
-    }
-    if (sportId === "FOOTBALL") {
+    } else if (sportId === "FOOTBALL") {
       const ft = parseInt(fullTime, 10);
       if (!ft || ft < 1 || ft > 120) {
         alert("Football categories need full time between 1 and 120 minutes");
@@ -108,12 +132,18 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
       const ex = Math.max(0, Math.min(30, parseInt(extra, 10) || 0));
       row.fullTimeMinutes = ft;
       row.extraTimeMinutes = ex > 0 ? ex : null;
-      row.oversPerInnings = null;
-    }
-    if (sportId !== "FOOTBALL" && sportId !== "CRICKET") {
-      row.oversPerInnings = null;
-      row.fullTimeMinutes = null;
-      row.extraTimeMinutes = null;
+    } else if (isSetBasedSport(sportId)) {
+      const pts = parseInt(points, 10);
+      const stw = parseInt(sets, 10);
+      if (!pts || pts < 1 || pts > 99) {
+        alert("Set sports need points per set between 1 and 99");
+        return;
+      }
+      if (!stw || stw < 1 || stw > 5) {
+        alert("Set sports need sets-to-win between 1 and 5");
+        return;
+      }
+      Object.assign(row, setScoringForSport(sportId, pts, stw));
     }
     onChange([...selected, row]);
     setDraftName("");
@@ -131,6 +161,31 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
     );
   };
 
+  const onSportChange = (cat, sport) => {
+    const patch = {
+      sport,
+      oversPerInnings: sport === "CRICKET" ? cat.oversPerInnings || 20 : null,
+      fullTimeMinutes: sport === "FOOTBALL" ? cat.fullTimeMinutes || 20 : null,
+      extraTimeMinutes: sport === "FOOTBALL" ? cat.extraTimeMinutes || null : null,
+      pointsPerSet: null,
+      setsToWin: null,
+      maxSets: null,
+      lastSetPoints: null,
+      pointCap: null,
+    };
+    if (isSetBasedSport(sport)) {
+      Object.assign(
+        patch,
+        setScoringForSport(
+          sport,
+          cat.pointsPerSet || defaultSetScoring(sport)?.pointsPerSet,
+          cat.setsToWin || defaultSetScoring(sport)?.setsToWin
+        )
+      );
+    }
+    updateRow(cat, patch);
+  };
+
   return (
     <div className="space-y-3">
       {selected.length > 0 && (
@@ -146,18 +201,7 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
               </span>
               <select
                 value={cat.sport || "FOOTBALL"}
-                onChange={(e) => {
-                  const sport = e.target.value;
-                  updateRow(cat, {
-                    sport,
-                    oversPerInnings:
-                      sport === "CRICKET" ? cat.oversPerInnings || 20 : null,
-                    fullTimeMinutes:
-                      sport === "FOOTBALL" ? cat.fullTimeMinutes || 20 : null,
-                    extraTimeMinutes:
-                      sport === "FOOTBALL" ? cat.extraTimeMinutes || null : null,
-                  });
-                }}
+                onChange={(e) => onSportChange(cat, e.target.value)}
                 className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-[10px] font-mono font-bold uppercase outline-none"
               >
                 {SPORT_OPTIONS.map((o) => (
@@ -218,6 +262,82 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
                   </label>
                 </>
               )}
+              {isSetBasedSport(cat.sport) && (
+                <>
+                  <label className="inline-flex items-center gap-1 text-[9px] font-mono text-deep-forest/60">
+                    Points
+                    <input
+                      type="number"
+                      min={1}
+                      max={99}
+                      value={cat.pointsPerSet || defaultSetScoring(cat.sport)?.pointsPerSet || 21}
+                      onChange={(e) => {
+                        const pointsPerSet = parseInt(e.target.value, 10) || 21;
+                        updateRow(cat, {
+                          pointsPerSet,
+                          lastSetPoints:
+                            cat.sport === "VOLLEYBALL"
+                              ? cat.lastSetPoints || 15
+                              : pointsPerSet,
+                        });
+                      }}
+                      className="w-14 bg-white border border-slate-200 rounded-lg px-1.5 py-1 text-[10px] font-mono outline-none"
+                    />
+                  </label>
+                  <label className="inline-flex items-center gap-1 text-[9px] font-mono text-deep-forest/60">
+                    Sets win
+                    <input
+                      type="number"
+                      min={1}
+                      max={5}
+                      value={cat.setsToWin || defaultSetScoring(cat.sport)?.setsToWin || 2}
+                      onChange={(e) => {
+                        const setsToWin = parseInt(e.target.value, 10) || 2;
+                        updateRow(cat, {
+                          setsToWin,
+                          maxSets: Math.max(setsToWin * 2 - 1, setsToWin),
+                        });
+                      }}
+                      className="w-12 bg-white border border-slate-200 rounded-lg px-1.5 py-1 text-[10px] font-mono outline-none"
+                    />
+                  </label>
+                  {cat.sport === "VOLLEYBALL" && (
+                    <label className="inline-flex items-center gap-1 text-[9px] font-mono text-deep-forest/60">
+                      Deciding
+                      <input
+                        type="number"
+                        min={1}
+                        max={99}
+                        value={cat.lastSetPoints || 15}
+                        onChange={(e) =>
+                          updateRow(cat, {
+                            lastSetPoints: parseInt(e.target.value, 10) || 15,
+                          })
+                        }
+                        className="w-12 bg-white border border-slate-200 rounded-lg px-1.5 py-1 text-[10px] font-mono outline-none"
+                      />
+                    </label>
+                  )}
+                  {cat.sport === "BADMINTON" && (
+                    <label className="inline-flex items-center gap-1 text-[9px] font-mono text-deep-forest/60">
+                      Cap
+                      <input
+                        type="number"
+                        min={1}
+                        max={99}
+                        value={cat.pointCap ?? 30}
+                        onChange={(e) => {
+                          const n = parseInt(e.target.value, 10);
+                          updateRow(cat, {
+                            pointCap: Number.isFinite(n) && n > 0 ? n : 30,
+                          });
+                        }}
+                        className="w-12 bg-white border border-slate-200 rounded-lg px-1.5 py-1 text-[10px] font-mono outline-none"
+                      />
+                    </label>
+                  )}
+                </>
+              )}
               <button
                 type="button"
                 onClick={() => removeCategory(cat)}
@@ -244,12 +364,20 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
                 addCategory(draftName);
               }
             }}
-            placeholder="Category e.g. OPEN, U15"
+            placeholder="Category e.g. OPEN, U15, Singles"
             className="flex-1 min-w-[120px] bg-cream-bg/40 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-3 py-2 text-sm text-deep-forest outline-none"
           />
           <select
             value={draftSport}
-            onChange={(e) => setDraftSport(e.target.value)}
+            onChange={(e) => {
+              const sport = e.target.value;
+              setDraftSport(sport);
+              const d = defaultSetScoring(sport);
+              if (d) {
+                setDraftPoints(String(d.pointsPerSet));
+                setDraftSetsToWin(String(d.setsToWin));
+              }
+            }}
             className="bg-cream-bg/40 border border-slate-200 rounded-xl px-2 py-2 text-[10px] font-mono font-bold uppercase outline-none"
           >
             {SPORT_OPTIONS.map((o) => (
@@ -293,6 +421,30 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
               />
             </>
           )}
+          {isSetBasedSport(draftSport) && (
+            <>
+              <input
+                type="number"
+                min={1}
+                max={99}
+                value={draftPoints}
+                onChange={(e) => setDraftPoints(e.target.value)}
+                title="Points per set / game"
+                placeholder="Pts"
+                className="w-16 bg-cream-bg/40 border border-slate-200 rounded-xl px-2 py-2 text-sm outline-none"
+              />
+              <input
+                type="number"
+                min={1}
+                max={5}
+                value={draftSetsToWin}
+                onChange={(e) => setDraftSetsToWin(e.target.value)}
+                title="Sets to win match"
+                placeholder="Sets"
+                className="w-16 bg-cream-bg/40 border border-slate-200 rounded-xl px-2 py-2 text-sm outline-none"
+              />
+            </>
+          )}
           <button
             type="button"
             onClick={() => addCategory(draftName)}
@@ -306,6 +458,16 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
         {draftSport === "FOOTBALL" && (
           <p className="text-[9px] font-mono text-deep-forest/45">
             Full time (min) and optional +extra — shown on viewer match cards at FT
+          </p>
+        )}
+        {draftSport === "CRICKET" && (
+          <p className="text-[9px] font-mono text-deep-forest/45">
+            Overs per innings for this category
+          </p>
+        )}
+        {isSetBasedSport(draftSport) && (
+          <p className="text-[9px] font-mono text-deep-forest/45">
+            Points to win a set/game · Sets needed to win the match (e.g. 2 = best of 3)
           </p>
         )}
         <div className="flex flex-wrap gap-1.5">
@@ -338,6 +500,10 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
 export default function AdminHome() {
   const [authChecked, setAuthChecked] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [sessionUser, setSessionUser] = useState(null);
+  const [adminTab, setAdminTab] = useState("tournaments");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState(null);
   const [loggingIn, setLoggingIn] = useState(false);
@@ -362,6 +528,29 @@ export default function AdminHome() {
   const [deleting, setDeleting] = useState(false);
   const editLogoInputRef = useRef(null);
 
+  const fetchTournamentsRef = useRef(null);
+
+  async function fetchTournaments({ silent = false } = {}) {
+    try {
+      if (!silent) setLoading(true);
+      const res = await fetch("/api/tournaments", { cache: "no-store" });
+      if (!res.ok) throw new Error("Failed to load tournaments");
+      const data = await res.json();
+      setTournaments(data);
+    } catch (err) {
+      if (!silent) setError(err.message);
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }
+  fetchTournamentsRef.current = fetchTournaments;
+
+  useSequentialPoll(
+    () => fetchTournamentsRef.current?.({ silent: true }),
+    10000,
+    { enabled: authenticated }
+  );
+
   useEffect(() => {
     (async () => {
       try {
@@ -371,8 +560,12 @@ export default function AdminHome() {
         });
         const data = await res.json();
         setAuthenticated(!!data.authenticated);
+        setIsAdmin(!!data.isAdmin);
+        setSessionUser(data.user || null);
       } catch {
         setAuthenticated(false);
+        setIsAdmin(false);
+        setSessionUser(null);
       } finally {
         setAuthChecked(true);
       }
@@ -407,7 +600,10 @@ export default function AdminHome() {
       const res = await fetch("/api/admin/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+        }),
         credentials: "include",
         cache: "no-store",
       });
@@ -418,10 +614,14 @@ export default function AdminHome() {
             "Production admin secrets missing. In Vercel → Project → Settings → Environment Variables, set ADMIN_PASSWORD and ADMIN_SECRET (secret ≥ 16 chars), then Redeploy."
           );
         }
-        throw new Error(data.error || "Invalid password");
+        throw new Error(data.error || "Invalid credentials");
       }
+      const data = await res.json();
       setAuthenticated(true);
+      setIsAdmin(data.role === "ADMIN" || data.user?.role === "ADMIN");
+      setSessionUser(data.user || null);
       setPassword("");
+      setEmail("");
       const next = new URLSearchParams(window.location.search).get("next");
       if (next && next.startsWith("/")) {
         window.location.href = next;
@@ -439,21 +639,9 @@ export default function AdminHome() {
       credentials: "include",
     });
     setAuthenticated(false);
+    setIsAdmin(false);
+    setSessionUser(null);
     setTournaments([]);
-  };
-
-  const fetchTournaments = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch("/api/tournaments");
-      if (!res.ok) throw new Error("Failed to load tournaments");
-      const data = await res.json();
-      setTournaments(data);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
   };
 
   const handleLogoChange = async (e) => {
@@ -496,6 +684,18 @@ export default function AdminHome() {
           return;
         }
       }
+      if (isSetBasedSport(c.sport)) {
+        const pts = parseInt(c.pointsPerSet, 10);
+        const stw = parseInt(c.setsToWin, 10);
+        if (!pts || pts < 1 || pts > 99) {
+          alert(`Category "${c.name}" needs points per set between 1 and 99`);
+          return;
+        }
+        if (!stw || stw < 1 || stw > 5) {
+          alert(`Category "${c.name}" needs sets-to-win between 1 and 5`);
+          return;
+        }
+      }
     }
 
     try {
@@ -533,15 +733,24 @@ export default function AdminHome() {
     setEditingId(tournament.id);
     setEditName(tournament.name || "");
     setEditCategories(
-      (tournament.categories || []).map((c) => ({
-        name: c.name,
-        sport: c.sport || "FOOTBALL",
-        oversPerInnings: c.oversPerInnings ?? null,
-        fullTimeMinutes:
-          c.fullTimeMinutes ??
-          ((c.sport || "FOOTBALL") === "FOOTBALL" ? 20 : null),
-        extraTimeMinutes: c.extraTimeMinutes ?? null,
-      }))
+      (tournament.categories || []).map((c) => {
+        const sport = c.sport || "FOOTBALL";
+        const defaults = isSetBasedSport(sport) ? defaultSetScoring(sport) : null;
+        return {
+          name: c.name,
+          sport,
+          oversPerInnings: c.oversPerInnings ?? null,
+          fullTimeMinutes:
+            c.fullTimeMinutes ??
+            (sport === "FOOTBALL" ? 20 : null),
+          extraTimeMinutes: c.extraTimeMinutes ?? null,
+          pointsPerSet: c.pointsPerSet ?? defaults?.pointsPerSet ?? null,
+          setsToWin: c.setsToWin ?? defaults?.setsToWin ?? null,
+          maxSets: c.maxSets ?? defaults?.maxSets ?? null,
+          lastSetPoints: c.lastSetPoints ?? defaults?.lastSetPoints ?? null,
+          pointCap: c.pointCap ?? defaults?.pointCap ?? null,
+        };
+      })
     );
     setEditStartDate(toDateInputValue(tournament.startDate));
     setEditLogoUrl(tournament.logoUrl || null);
@@ -615,6 +824,18 @@ export default function AdminHome() {
           return;
         }
       }
+      if (isSetBasedSport(c.sport)) {
+        const pts = parseInt(c.pointsPerSet, 10);
+        const stw = parseInt(c.setsToWin, 10);
+        if (!pts || pts < 1 || pts > 99) {
+          alert(`Category "${c.name}" needs points per set between 1 and 99`);
+          return;
+        }
+        if (!stw || stw < 1 || stw > 5) {
+          alert(`Category "${c.name}" needs sets-to-win between 1 and 5`);
+          return;
+        }
+      }
     }
 
     try {
@@ -676,6 +897,9 @@ export default function AdminHome() {
             <h1 className="text-3xl font-display uppercase text-white drop-shadow">
               FORCE PULSE Admin
             </h1>
+            <p className="text-sm text-white/75 font-medium">
+              Sign in with your organizer email and password.
+            </p>
           </div>
         </header>
 
@@ -686,12 +910,27 @@ export default function AdminHome() {
           >
             <div>
               <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold">
-                Admin Password
+                Email
+              </label>
+              <input
+                type="email"
+                required
+                autoComplete="username"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full bg-cream-bg/40 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-4 py-2.5 text-sm outline-none"
+                placeholder="you@email.com"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-mono text-deep-forest/60 uppercase tracking-widest mb-2 font-bold">
+                Password
               </label>
               <input
                 type="password"
                 required
                 autoFocus
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full bg-cream-bg/40 border border-slate-200 focus:bg-white focus:border-mustard-gold rounded-xl px-4 py-2.5 text-sm outline-none"
@@ -716,12 +955,8 @@ export default function AdminHome() {
               ) : (
                 <Lock className="w-4 h-4" />
               )}
-              Unlock Admin
+              Sign in
             </button>
-
-            <p className="text-[9px] font-mono text-center text-deep-forest/40">
-              Spectators use the public home — this page is for organizers only.
-            </p>
           </form>
         </main>
       </div>
@@ -754,17 +989,57 @@ export default function AdminHome() {
             </button>
           </div>
 
+          {sessionUser && (
+            <p className="text-xs font-mono text-white/70">
+              Signed in as <span className="text-mustard-gold font-bold">{sessionUser.name}</span>
+              {sessionUser.email ? ` (${sessionUser.email})` : ""}
+            </p>
+          )}
+
           <h1 className="text-3xl sm:text-4xl md:text-5xl font-display uppercase tracking-normal text-white drop-shadow">
-            Set up your tournament
+            {isAdmin ? "Set up your tournament" : "Your tournaments"}
           </h1>
           <p className="text-sm text-white/80 font-medium max-w-xl">
-            Create a tournament with one or more categories — each gets its own schedule.
+            {isAdmin
+              ? "Create a tournament with one or more categories — each gets its own schedule."
+              : "Open an assigned tournament to score matches, manage clubs, and build the schedule."}
           </p>
         </div>
       </header>
 
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-8 sm:py-12 relative z-10">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-10">
+        {isAdmin && (
+          <div className="flex gap-2 mb-8 overflow-x-auto">
+            {[
+              { id: "tournaments", label: "Tournaments", icon: Trophy },
+              { id: "users", label: "Users", icon: UserCog },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const active = adminTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setAdminTab(tab.id)}
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-[10px] font-mono font-bold uppercase tracking-wider border cursor-pointer min-h-[44px] ${
+                    active
+                      ? "bg-mustard-gold text-deep-forest border-mustard-gold"
+                      : "bg-white text-deep-forest/70 border-slate-200 hover:border-mustard-gold/50"
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {isAdmin && adminTab === "users" ? (
+          <UserManagement tournaments={tournaments} />
+        ) : (
+        <div className={`grid grid-cols-1 gap-10 ${isAdmin ? "lg:grid-cols-3" : ""}`}>
+          {isAdmin && (
           <div className="lg:col-span-1">
             <div className="bg-white border border-slate-200 border-t-4 border-t-mustard-gold rounded-2xl p-6 shadow-sm relative overflow-hidden">
               <div className="flex items-center gap-2 mb-6 border-b border-cream-bg pb-3">
@@ -879,11 +1154,12 @@ export default function AdminHome() {
               </form>
             </div>
           </div>
+          )}
 
-          <div className="lg:col-span-2 space-y-6">
+          <div className={isAdmin ? "lg:col-span-2 space-y-6" : "space-y-6"}>
             <div className="flex items-center justify-between">
               <h2 className="text-xs font-bold tracking-widest uppercase font-mono text-deep-forest/60">
-                ACTIVE TOURNAMENTS
+                {isAdmin ? "ACTIVE TOURNAMENTS" : "ASSIGNED TOURNAMENTS"}
               </h2>
               <span className="text-[10px] font-mono text-deep-forest bg-white border border-mustard-gold/30 rounded-full px-3.5 py-1 font-bold shadow-sm">
                 Count: {tournaments.length}
@@ -906,15 +1182,19 @@ export default function AdminHome() {
                   No Tournaments Registered
                 </h3>
                 <p className="text-xs text-deep-forest/60 max-w-sm leading-relaxed">
-                  Launch a tournament and pick categories like U15 and OPEN — each category will have its own clubs and fixtures.
+                  {isAdmin
+                    ? "Launch a tournament and pick categories like U15 and OPEN — each category will have its own clubs and fixtures."
+                    : "No tournaments are assigned to your account yet. Ask the admin to assign you."}
                 </p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {tournaments.map((t) => {
                   const isEditing = editingId === t.id;
+                  const isDone = isTournamentComplete(t);
 
                   if (isEditing) {
+                    if (!isAdmin) return null;
                     return (
                       <form
                         key={t.id}
@@ -1050,9 +1330,17 @@ export default function AdminHome() {
                   return (
                     <div
                       key={t.id}
-                      className="group flex flex-col bg-white border border-slate-200/80 hover:border-mustard-gold hover:shadow-md rounded-2xl p-6 transition-all duration-300 shadow-sm relative overflow-hidden"
+                      className={`group flex flex-col bg-white border rounded-2xl p-6 transition-all duration-300 shadow-sm relative overflow-hidden ${
+                        isDone
+                          ? "border-slate-300/90 hover:border-slate-400 hover:shadow-md"
+                          : "border-slate-200/80 hover:border-mustard-gold hover:shadow-md"
+                      }`}
                     >
-                      <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-mustard-gold rounded-l-[14px]" />
+                      <div
+                        className={`absolute left-0 top-0 bottom-0 w-1.5 rounded-l-[14px] ${
+                          isDone ? "bg-slate-400" : "bg-mustard-gold"
+                        }`}
+                      />
 
                       <div className="flex justify-between items-start gap-3 mb-4 pl-2">
                         <Link
@@ -1071,6 +1359,12 @@ export default function AdminHome() {
                             </div>
                           )}
                           <div className="min-w-0">
+                            {isDone && (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold uppercase tracking-wider text-slate-600 bg-slate-100 border border-slate-200 rounded-md px-1.5 py-0.5 mb-1">
+                                <CheckCircle2 className="w-2.5 h-2.5" />
+                                Tournament done
+                              </span>
+                            )}
                             <h3 className="text-lg font-bold text-deep-forest group-hover:text-mustard-gold-hover transition-colors leading-snug font-display tracking-wide uppercase truncate">
                               {t.name}
                             </h3>
@@ -1098,16 +1392,33 @@ export default function AdminHome() {
                       </div>
 
                       {/* Action buttons row */}
-                      <div className="grid grid-cols-4 gap-2 mb-4 pt-1 pl-2">
-                        <Link
-                          href={`/live/${t.id}`}
-                          className="flex flex-col items-center justify-center gap-1.5 py-2 px-1 bg-emerald-50/40 hover:bg-emerald-50 text-emerald-800 rounded-xl border border-slate-200 hover:border-emerald-200 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-sm"
-                          aria-label={`Live board for ${t.name}`}
-                          title="Public live board"
-                        >
-                          <Radio className="w-4 h-4" />
-                          <span className="text-[9px] font-mono font-bold uppercase tracking-wide">Live</span>
-                        </Link>
+                      <div className={`grid gap-2 mb-4 pt-1 pl-2 ${isAdmin ? "grid-cols-4" : "grid-cols-3"}`}>
+                        {isDone ? (
+                          <Link
+                            href={`/live/${t.id}`}
+                            className="flex flex-col items-center justify-center gap-1.5 py-2 px-1 bg-slate-100 hover:bg-slate-200/80 text-slate-700 rounded-xl border border-slate-300 hover:border-slate-400 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-sm"
+                            aria-label={`Results for ${t.name}`}
+                            title="Tournament finished — view results"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span className="text-[9px] font-mono font-bold uppercase tracking-wide">
+                              Done
+                            </span>
+                          </Link>
+                        ) : (
+                          <Link
+                            href={`/live/${t.id}`}
+                            className="flex flex-col items-center justify-center gap-1.5 py-2 px-1 bg-emerald-50/40 hover:bg-emerald-50 text-emerald-800 rounded-xl border border-slate-200 hover:border-emerald-200 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-sm"
+                            aria-label={`Live board for ${t.name}`}
+                            title="Public live board"
+                          >
+                            <Radio className="w-4 h-4" />
+                            <span className="text-[9px] font-mono font-bold uppercase tracking-wide">
+                              Live
+                            </span>
+                          </Link>
+                        )}
+                        {isAdmin && (
                         <button
                           type="button"
                           onClick={() => startEditing(t)}
@@ -1118,6 +1429,8 @@ export default function AdminHome() {
                           <Pencil className="w-4 h-4" />
                           <span className="text-[9px] font-mono font-bold uppercase tracking-wide">Edit</span>
                         </button>
+                        )}
+                        {isAdmin && (
                         <button
                           type="button"
                           onClick={() => setPendingDelete(t)}
@@ -1128,6 +1441,7 @@ export default function AdminHome() {
                           <Trash2 className="w-4 h-4" />
                           <span className="text-[9px] font-mono font-bold uppercase tracking-wide">Delete</span>
                         </button>
+                        )}
                         <Link
                           href={`/tournaments/${t.id}`}
                           className="flex flex-col items-center justify-center gap-1.5 py-2 px-1 bg-slate-50/40 hover:bg-slate-100 text-deep-forest rounded-xl border border-slate-200 hover:border-slate-300 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 shadow-sm"
@@ -1163,6 +1477,7 @@ export default function AdminHome() {
             )}
           </div>
         </div>
+        )}
       </main>
 
       {pendingDelete && (

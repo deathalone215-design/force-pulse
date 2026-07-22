@@ -1,4 +1,4 @@
-/** Calendar date only (local), ignoring time. */
+/** Calendar date only (local), ignoring time of day. */
 export function toDay(dateLike) {
   const d = new Date(dateLike);
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -31,4 +31,27 @@ export function formatTournamentDate(dateLike) {
     day: "numeric",
     year: "numeric",
   });
+}
+
+/** Planned match time chip label, e.g. "Jul 21 · 5:00 PM". */
+export function formatScheduledAt(dateLike) {
+  if (!dateLike) return null;
+  const d = new Date(dateLike);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })} · ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+}
+
+/** Match totals from list API (`totalMatchCount`, `completedMatchCount`, `liveMatchCount`). */
+export function tournamentMatchStats(tournament) {
+  return {
+    total: tournament?.totalMatchCount ?? 0,
+    completed: tournament?.completedMatchCount ?? 0,
+    live: tournament?.liveMatchCount ?? 0,
+  };
+}
+
+/** All scheduled matches finished — no LIVE games left. */
+export function isTournamentComplete(tournament) {
+  const { total, completed, live } = tournamentMatchStats(tournament);
+  return total > 0 && completed === total && live === 0;
 }

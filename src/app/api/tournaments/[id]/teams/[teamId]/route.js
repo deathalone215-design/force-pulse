@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { requireTournamentAccess } from "@/lib/accessControl";
 
 async function getTeamInTournament(tournamentId, teamId) {
   return prisma.team.findFirst({
@@ -12,8 +13,11 @@ async function getTeamInTournament(tournamentId, teamId) {
 }
 
 export async function PATCH(request, { params }) {
+  const { id: tournamentId, teamId } = await params;
+  const gate = await requireTournamentAccess(request, tournamentId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: tournamentId, teamId } = await params;
     const body = await request.json();
     const { name, logoUrl } = body;
 
@@ -48,8 +52,11 @@ export async function PATCH(request, { params }) {
 }
 
 export async function DELETE(request, { params }) {
+  const { id: tournamentId, teamId } = await params;
+  const gate = await requireTournamentAccess(request, tournamentId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: tournamentId, teamId } = await params;
 
     const existing = await getTeamInTournament(tournamentId, teamId);
     if (!existing) {
@@ -75,8 +82,11 @@ export async function DELETE(request, { params }) {
 }
 
 export async function POST(request, { params }) {
+  const { id: tournamentId, teamId } = await params;
+  const gate = await requireTournamentAccess(request, tournamentId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: tournamentId, teamId } = await params;
     const body = await request.json();
     const { name, shirtNumber, logoUrl } = body;
 

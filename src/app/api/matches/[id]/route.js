@@ -7,10 +7,14 @@ import {
   casUpdateMatch,
   parseExpectedVersion,
 } from "@/lib/matchCas";
+import { requireMatchAccess } from "@/lib/accessControl";
 
-export async function GET(_request, { params }) {
+export async function GET(request, { params }) {
+  const { id } = await params;
+  const gate = await requireMatchAccess(request, id);
+  if (gate.error) return gate.error;
+
   try {
-    const { id } = await params;
     const match = await prisma.match.findUnique({
       where: { id },
       include: matchDetailInclude,
@@ -35,8 +39,11 @@ export async function GET(_request, { params }) {
 }
 
 export async function PATCH(request, { params }) {
+  const { id } = await params;
+  const gate = await requireMatchAccess(request, id);
+  if (gate.error) return gate.error;
+
   try {
-    const { id } = await params;
     const body = await request.json();
     const { teamAId, teamBId } = body;
 

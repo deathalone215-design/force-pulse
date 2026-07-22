@@ -185,3 +185,78 @@ body {
     animation: none;
   }
 }
+
+/* Champion celebration — cracker bursts + falling confetti */
+.fp-firework {
+  position: absolute;
+  width: 110px;
+  height: 110px;
+  border-radius: 9999px;
+  pointer-events: none;
+  animation: fp-firework-burst 2.6s ease-out infinite;
+}
+
+@keyframes fp-firework-burst {
+  0% {
+    transform: scale(0.1);
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.95;
+  }
+  45% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  70%,
+  100% {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+}
+
+.fp-confetti {
+  position: absolute;
+  top: -14px;
+  border-radius: 2px;
+  pointer-events: none;
+  animation-name: fp-confetti-fall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+@keyframes fp-confetti-fall {
+  0% {
+    transform: translateY(0) rotate(0deg);
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(460px) rotate(640deg);
+    opacity: 0;
+  }
+}
+
+.fp-champion-trophy {
+  animation: fp-trophy-pop 1.6s ease-in-out infinite;
+}
+
+@keyframes fp-trophy-pop {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-8px) scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fp-firework,
+  .fp-confetti,
+  .fp-champion-trophy {
+    animation: none;
+  }
+}

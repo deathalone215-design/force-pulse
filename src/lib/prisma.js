@@ -5,7 +5,7 @@ import pg from 'pg';
 const globalForPrisma = global;
 
 /** Bump when schema fields change so hot reload drops a stale PrismaClient. */
-const PRISMA_CLIENT_REV = 2;
+const PRISMA_CLIENT_REV = 9;
 
 const getPrismaClient = () => {
   const connectionString = process.env.DATABASE_URL;
@@ -14,9 +14,10 @@ const getPrismaClient = () => {
   }
   const pool = new pg.Pool({
     connectionString,
-    // PgBouncer transaction mode: avoid sticky stale sessions
-    max: 5,
+    // PgBouncer transaction mode: enough concurrency for live + admin
+    max: 10,
     idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 8_000,
   });
   const adapter = new PrismaPg(pool);
   return new PrismaClient({ adapter });

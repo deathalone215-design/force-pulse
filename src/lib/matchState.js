@@ -2,6 +2,49 @@
  * Match-scoped state helpers: versioning, merges, score derivation.
  */
 
+/** Fingerprint for matching optimistic tmp rows to saved DB events. */
+export function eventDedupKey(event) {
+  if (!event) return "";
+  const minute =
+    event.minute === null || event.minute === undefined
+      ? ""
+      : String(event.minute);
+  return [
+    String(event.type || "").toUpperCase(),
+    event.playerId || "",
+    event.teamId || "",
+    minute,
+  ].join("|");
+}
+
+/** Drop duplicate ids and orphan tmp_ placeholders once the real row exists. */
+export function normalizeMatchEvents(events) {
+  if (!Array.isArray(events) || events.length === 0) return events || [];
+
+  const byId = new Map();
+  const tmpRows = [];
+  for (const event of events) {
+    const id = event?.id;
+    if (!id) continue;
+    if (String(id).startsWith("tmp_")) {
+      tmpRows.push(event);
+    } else if (!byId.has(id)) {
+      byId.set(id, event);
+    }
+  }
+
+  const saved = [...byId.values()];
+  const savedKeys = new Set(saved.map(eventDedupKey));
+  const pendingTmp = tmpRows.filter((e) => !savedKeys.has(eventDedupKey(e)));
+
+  return [...saved, ...pendingTmp].sort((a, b) => {
+    const ta = new Date(a.createdAt || 0).getTime();
+    const tb = new Date(b.createdAt || 0).getTime();
+    if (ta !== tb) return ta - tb;
+    return String(a.id).localeCompare(String(b.id));
+  });
+}
+
 export const matchDetailInclude = {
   teamA: { include: { players: true } },
   teamB: { include: { players: true } },
@@ -15,6 +58,12 @@ export const matchDetailInclude = {
   },
   cricketBalls: { orderBy: { createdAt: "asc" } },
   matchSets: { orderBy: { setNumber: "asc" } },
+  manOfTheMatch: {
+    select: { id: true, name: true, shirtNumber: true, logoUrl: true, teamId: true },
+  },
+  bestFielder: {
+    select: { id: true, name: true, shirtNumber: true, logoUrl: true, teamId: true },
+  },
   round: {
     select: {
       id: true,
@@ -28,6 +77,11 @@ export const matchDetailInclude = {
           oversPerInnings: true,
           fullTimeMinutes: true,
           extraTimeMinutes: true,
+          pointsPerSet: true,
+          setsToWin: true,
+          maxSets: true,
+          lastSetPoints: true,
+          pointCap: true,
           scheduleFormat: true,
         },
       },
@@ -52,7 +106,12 @@ export function shouldAcceptServerMatch(local, server) {
   if (localMs === 0) return true;
   const serverMs = matchUpdatedAtMs(server);
   if (serverMs === 0) return false;
-  return serverMs >= localMs;
+  if (serverMs !== localMs) return serverMs > localMs;
+  // Same timestamp — prefer higher version (set-point bumps version every rally)
+  const lv = Number(local.version) || 0;
+  const sv = Number(server.version) || 0;
+  if (sv !== lv) return sv >= lv;
+  return true;
 }
 
 export function mergeMatchFromApi(existing, update, { force = false } = {}) {
@@ -69,7 +128,9 @@ export function mergeMatchFromApi(existing, update, { force = false } = {}) {
     teamA: cleaned.teamA || existing?.teamA,
     teamB: cleaned.teamB || existing?.teamB,
     // Never let a scalar-only mutation response wipe the event log with []
-    events: Array.isArray(cleaned.events) ? cleaned.events : existing?.events,
+    events: Array.isArray(cleaned.events)
+      ? normalizeMatchEvents(cleaned.events)
+      : existing?.events,
     cricketBalls: Array.isArray(cleaned.cricketBalls)
       ? cleaned.cricketBalls
       : existing?.cricketBalls,
@@ -153,6 +214,7 @@ export const matchMutationSelect = {
   wicketsB: true,
   ballsFacedA: true,
   ballsFacedB: true,
+  scheduledAt: true,
   kickoffAt: true,
   clockPausedAt: true,
   pausedSeconds: true,

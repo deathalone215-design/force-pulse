@@ -9,10 +9,14 @@ import {
   parseLockToken,
 } from "@/lib/matchCas";
 import { kickoffFromEvent } from "@/lib/footballClock";
+import { requireMatchAccess } from "@/lib/accessControl";
 
 export async function POST(request, { params }) {
+  const { id: matchId } = await params;
+  const gate = await requireMatchAccess(request, matchId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: matchId } = await params;
     const body = await request.json();
 
     if (body?.action === "delete" || body?.delete === true) {
@@ -181,8 +185,11 @@ async function deleteMatchEvent(matchId, body) {
 }
 
 export async function DELETE(request, { params }) {
+  const { id: matchId } = await params;
+  const gate = await requireMatchAccess(request, matchId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: matchId } = await params;
     let body = {};
     try {
       body = await request.json();

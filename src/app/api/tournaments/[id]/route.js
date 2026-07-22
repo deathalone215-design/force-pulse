@@ -1,9 +1,13 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { parseCategoryInputs } from "@/lib/sports";
-import { loadTournamentWithCategories } from "@/lib/tournamentData";
+import { loadTournamentForAdminDashboard } from "@/lib/tournamentData";
 import { loadTournamentForLiveBoard } from "@/lib/tournamentLiveBoard";
 import { loadLiveBoardDelta } from "@/lib/tournamentLiveDelta";
+import {
+  requireFullAdmin,
+  requireTournamentAccess,
+} from "@/lib/accessControl";
 
 export async function GET(request, { params }) {
   try {
@@ -24,10 +28,15 @@ export async function GET(request, { params }) {
       });
     }
 
+    if (view !== "live") {
+      const access = await requireTournamentAccess(request, id);
+      if (access.error) return access.error;
+    }
+
     const tournament =
       view === "live"
         ? await loadTournamentForLiveBoard(id)
-        : await loadTournamentWithCategories(id);
+        : await loadTournamentForAdminDashboard(id);
 
     if (!tournament) {
       return NextResponse.json({ error: "Tournament not found" }, { status: 404 });
@@ -38,7 +47,7 @@ export async function GET(request, { params }) {
       view === "live"
         ? {
             "Cache-Control":
-              "public, max-age=2, s-maxage=3, stale-while-revalidate=10",
+              "public, max-age=1, s-maxage=1, stale-while-revalidate=3",
           }
         : {
             "Cache-Control": "no-store, no-cache, must-revalidate",
@@ -55,6 +64,9 @@ export async function GET(request, { params }) {
 }
 
 export async function DELETE(request, { params }) {
+  const gate = await requireFullAdmin(request);
+  if (gate.error) return gate.error;
+
   try {
     const { id } = await params;
 
@@ -70,6 +82,9 @@ export async function DELETE(request, { params }) {
 }
 
 export async function PATCH(request, { params }) {
+  const gate = await requireFullAdmin(request);
+  if (gate.error) return gate.error;
+
   try {
     const { id } = await params;
     const body = await request.json();
@@ -145,6 +160,11 @@ export async function PATCH(request, { params }) {
               oversPerInnings: cat.oversPerInnings,
               fullTimeMinutes: cat.fullTimeMinutes,
               extraTimeMinutes: cat.extraTimeMinutes,
+              pointsPerSet: cat.pointsPerSet,
+              setsToWin: cat.setsToWin,
+              maxSets: cat.maxSets,
+              lastSetPoints: cat.lastSetPoints,
+              pointCap: cat.pointCap,
               tournamentId: id,
             },
           });
@@ -152,6 +172,11 @@ export async function PATCH(request, { params }) {
           prev.oversPerInnings !== cat.oversPerInnings ||
           prev.fullTimeMinutes !== cat.fullTimeMinutes ||
           prev.extraTimeMinutes !== cat.extraTimeMinutes ||
+          prev.pointsPerSet !== cat.pointsPerSet ||
+          prev.setsToWin !== cat.setsToWin ||
+          prev.maxSets !== cat.maxSets ||
+          prev.lastSetPoints !== cat.lastSetPoints ||
+          prev.pointCap !== cat.pointCap ||
           (prev.sport || "FOOTBALL").toUpperCase() !== cat.sport
         ) {
           await prisma.tournamentCategory.update({
@@ -161,6 +186,11 @@ export async function PATCH(request, { params }) {
               oversPerInnings: cat.oversPerInnings,
               fullTimeMinutes: cat.fullTimeMinutes,
               extraTimeMinutes: cat.extraTimeMinutes,
+              pointsPerSet: cat.pointsPerSet,
+              setsToWin: cat.setsToWin,
+              maxSets: cat.maxSets,
+              lastSetPoints: cat.lastSetPoints,
+              pointCap: cat.pointCap,
             },
           });
         }

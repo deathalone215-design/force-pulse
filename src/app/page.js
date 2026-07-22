@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import {
   Trophy,
@@ -11,13 +11,17 @@ import {
   Tags,
   Radio,
   Activity,
+  CheckCircle2,
+  Lock,
 } from "lucide-react";
 import { categoryDisplayName } from "@/lib/sports";
 import {
   hasTournamentDayStarted,
   isTournamentLiveNow,
+  isTournamentComplete,
   formatTournamentDate,
 } from "@/lib/tournamentDate";
+import { useSequentialPoll } from "@/hooks/useSequentialPoll";
 
 function teamCount(tournament) {
   if (!tournament?.categories) return 0;
@@ -27,13 +31,19 @@ function teamCount(tournament) {
   );
 }
 
-/** @param {"live"|"ready"|"upcoming"} mode */
+/** @param {"live"|"ready"|"upcoming"|"done"} mode */
 function TournamentCard({ t, mode }) {
   const isLive = mode === "live";
   const isReady = mode === "ready";
   const isUpcoming = mode === "upcoming";
+  const isDone = mode === "done";
 
-  const footerLabel = isLive ? (
+  const footerLabel = isDone ? (
+    <>
+      <CheckCircle2 className="w-3.5 h-3.5" />
+      Tournament finished — view results
+    </>
+  ) : isLive ? (
     <>
       <Activity className="w-3.5 h-3.5" />
       {t.liveMatchCount} match{t.liveMatchCount === 1 ? "" : "es"} live — open board
@@ -75,6 +85,12 @@ function TournamentCard({ t, mode }) {
                   Live now
                 </span>
               )}
+              {isDone && (
+                <span className="inline-flex items-center gap-1 text-[9px] font-mono font-bold uppercase tracking-wider text-slate-600 bg-slate-100 border border-slate-200 rounded-md px-1.5 py-0.5">
+                  <CheckCircle2 className="w-2.5 h-2.5" />
+                  Done
+                </span>
+              )}
             </div>
             <h3 className="text-lg sm:text-xl font-bold text-deep-forest group-hover:text-mustard-gold-hover transition-colors leading-snug font-display tracking-wide uppercase truncate">
               {t.name}
@@ -104,13 +120,17 @@ function TournamentCard({ t, mode }) {
           className={`p-2 rounded-xl border shrink-0 ${
             isLive
               ? "bg-red-50 border-red-200 text-red-700"
-              : isUpcoming
-                ? "bg-cream-bg border-mustard-gold/50 group-hover:bg-mustard-gold group-hover:border-mustard-gold"
-                : "bg-cream-bg border-slate-200 group-hover:bg-mustard-gold group-hover:border-mustard-gold"
+              : isDone
+                ? "bg-slate-100 border-slate-200 text-slate-600"
+                : isUpcoming
+                  ? "bg-cream-bg border-mustard-gold/50 group-hover:bg-mustard-gold group-hover:border-mustard-gold"
+                  : "bg-cream-bg border-slate-200 group-hover:bg-mustard-gold group-hover:border-mustard-gold"
           }`}
         >
           {isLive ? (
             <Activity className="w-4 h-4 animate-pulse" />
+          ) : isDone ? (
+            <CheckCircle2 className="w-4 h-4" />
           ) : isUpcoming ? (
             <Users className="w-4 h-4" />
           ) : (
@@ -134,7 +154,9 @@ function TournamentCard({ t, mode }) {
         className={`mt-4 flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-wider ${
           isLive
             ? "text-red-700"
-            : "text-mustard-gold-hover"
+            : isDone
+              ? "text-slate-600"
+              : "text-mustard-gold-hover"
         }`}
       >
         {footerLabel}
@@ -148,9 +170,11 @@ function TournamentCard({ t, mode }) {
       className={`group flex flex-col bg-white border-2 border-dashed rounded-2xl p-4 sm:p-6 transition-all duration-300 shadow-sm relative overflow-hidden hover:border-solid hover:shadow-md ${
         isLive
           ? "border-red-300 ring-1 ring-red-100"
-          : isUpcoming
-            ? "border-slate-300 hover:border-mustard-gold"
-            : "border-mustard-gold"
+          : isDone
+            ? "border-slate-300 hover:border-slate-400"
+            : isUpcoming
+              ? "border-slate-300 hover:border-mustard-gold"
+              : "border-mustard-gold"
       }`}
     >
       {cardBody}
@@ -162,41 +186,42 @@ export default function PublicHome() {
   const [tournaments, setTournaments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const loadRef = useRef(null);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const load = async ({ silent = false } = {}) => {
-      try {
-        if (!silent) setLoading(true);
-        const res = await fetch("/api/tournaments", { cache: "no-store" });
-        if (!res.ok) throw new Error("Failed to load tournaments");
-        const data = await res.json();
-        if (!cancelled) {
-          setTournaments(data);
-          setError(null);
-        }
-      } catch (err) {
-        if (!cancelled) setError(err.message);
-      } finally {
-        if (!cancelled && !silent) setLoading(false);
-      }
-    };
-
-    load();
-    // Poll so public home picks up when admin sets a match LIVE
-    const timer = setInterval(() => load({ silent: true }), 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
+  const load = useCallback(async ({ silent = false } = {}) => {
+    try {
+      if (!silent) setLoading(true);
+      const res = await fetch("/api/tournaments", { cache: "no-store" });
+      if (!res.ok) throw new Error("Failed to load tournaments");
+      const data = await res.json();
+      setTournaments(data);
+      setError(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      if (!silent) setLoading(false);
+    }
   }, []);
 
-  const liveTournaments = tournaments.filter((t) => isTournamentLiveNow(t));
-  const matchDayWaiting = tournaments.filter(
+  loadRef.current = load;
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useSequentialPoll(
+    () => loadRef.current?.({ silent: true }),
+    10000
+  );
+
+  const completedTournaments = tournaments.filter((t) => isTournamentComplete(t));
+  const activeTournaments = tournaments.filter((t) => !isTournamentComplete(t));
+
+  const liveTournaments = activeTournaments.filter((t) => isTournamentLiveNow(t));
+  const matchDayWaiting = activeTournaments.filter(
     (t) => hasTournamentDayStarted(t) && !isTournamentLiveNow(t)
   );
-  const upcomingTournaments = tournaments.filter(
+  const upcomingTournaments = activeTournaments.filter(
     (t) => !hasTournamentDayStarted(t)
   );
 
@@ -212,14 +237,23 @@ export default function PublicHome() {
           }}
         />
 
-        <div className="max-w-6xl w-full mx-auto px-4 relative z-10 pb-8 sm:pb-12 pt-12 sm:pt-16 space-y-4 sm:space-y-5">
-          <div className="flex flex-wrap items-center gap-2 text-mustard-gold font-mono text-[10px] sm:text-xs font-bold uppercase tracking-widest">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-              Live
-            </span>
-            <span className="text-white/50">•</span>
-            <span>Public Board</span>
+        <div className="max-w-6xl w-full mx-auto px-4 relative z-10 pb-8 sm:pb-12 pt-6 sm:pt-8 space-y-4 sm:space-y-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2 text-mustard-gold font-mono text-[10px] sm:text-xs font-bold uppercase tracking-widest pt-1">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                Live
+              </span>
+              <span className="text-white/50">•</span>
+              <span>Public Board</span>
+            </div>
+            <Link
+              href="/admin"
+              className="inline-flex items-center gap-2 px-4 py-2.5 min-h-[44px] bg-mustard-gold hover:bg-mustard-gold-hover text-deep-forest rounded-full text-[10px] sm:text-[11px] font-mono font-bold uppercase tracking-wider shadow-lg border border-white/20 shrink-0 transition-all hover:scale-[1.02] active:scale-[0.98]"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              Organizer login
+            </Link>
           </div>
 
           <div className="flex items-center gap-3 sm:gap-4">
@@ -310,7 +344,7 @@ export default function PublicHome() {
               </section>
             )}
 
-            {/* Before Jul 18 */}
+            {/* Before kickoff */}
             {upcomingTournaments.length > 0 && (
               <section className="space-y-5">
                 <div className="flex items-center justify-between gap-3">
@@ -328,9 +362,36 @@ export default function PublicHome() {
                 </div>
               </section>
             )}
+
+            {/* All matches finished */}
+            {completedTournaments.length > 0 && (
+              <section className="space-y-5">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-xs font-bold tracking-widest uppercase font-mono text-deep-forest/60">
+                    Completed
+                  </h2>
+                  <span className="text-[10px] font-mono text-deep-forest/70 bg-cream-bg border border-slate-200 rounded-full px-3.5 py-1 font-bold">
+                    {completedTournaments.length}
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {completedTournaments.map((t) => (
+                    <TournamentCard key={t.id} t={t} mode="done" />
+                  ))}
+                </div>
+              </section>
+            )}
           </>
         )}
       </main>
+
+      <footer className="border-t border-slate-200 bg-white py-6">
+        <div className="max-w-6xl mx-auto px-4 text-center">
+          <p className="text-[10px] font-mono text-slate-400 tracking-wider">
+            © 2026 FORCE PULSE — Public live board
+          </p>
+        </div>
+      </footer>
     </div>
   );
 }

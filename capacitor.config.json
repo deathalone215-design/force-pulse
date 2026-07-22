@@ -3,7 +3,6 @@
   "appName": "Force Pulse",
   "webDir": "public",
   "server": {
-    "url": "http://10.0.2.2:3000",
-    "cleartext": true
+    "url": "https://forcepulse.vercel.app"
   }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, Children } from "react";
+import { useState, useEffect, useCallback, useRef, Children, useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -17,7 +17,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { isTopScorerGoal } from "@/lib/matchEvents";
-import { hasTournamentDayStarted, formatTournamentDate } from "@/lib/tournamentDate";
+import { hasTournamentDayStarted, formatTournamentDate, formatScheduledAt } from "@/lib/tournamentDate";
 import {
   ballsToOvers,
   calculateCricketLeaders,
@@ -40,6 +40,7 @@ import {
   isSetBasedSport,
   calculateSetBasedStandings,
   SPORT_CONFIGS,
+  getConfig,
   getSetTarget,
 } from "@/lib/setBasedSports";
 import {
@@ -47,9 +48,12 @@ import {
   isSinglesCategory,
   isDoublesOrMixedCategory,
 } from "@/lib/sports";
+import { resolveTeamLogo } from "@/lib/teamLogo";
 import { isPlaceholderTeam, buildFootballStandings } from "@/lib/tournamentResolver";
 import { getRoundDisplayName } from "@/lib/scheduleFormats";
 import { applyLiveBoardDelta, mergeLiveBoardSnapshot } from "@/lib/liveBoardMerge";
+import { useMatchRealtime } from "@/hooks/useMatchRealtime";
+import { hasSupabaseRealtimeEnv } from "@/lib/supabaseBrowser";
 import {
   formatFootballClock,
   footballElapsedSeconds,
@@ -69,12 +73,8 @@ const getRoundName = (number, totalRounds, format, customName) =>
 
 function withTeamLogo(team, category) {
   if (!team) return team;
-  if (team.logoUrl) return team;
-  const fromCat = (category?.teams || []).find((t) => t.id === team.id);
-  if (fromCat?.logoUrl) return { ...team, logoUrl: fromCat.logoUrl };
-  const playerLogo =
-    team.players?.[0]?.logoUrl || fromCat?.players?.[0]?.logoUrl || null;
-  if (playerLogo) return { ...team, logoUrl: playerLogo };
+  const logo = resolveTeamLogo(team, category);
+  if (logo) return { ...team, logoUrl: logo };
   return team;
 }
 
@@ -159,6 +159,181 @@ function TeamBadge({ team, size = "md" }) {
   );
 }
 
+const CONFETTI_COLORS = ["#e5a93b", "#ef4444", "#ffffff", "#3b82f6", "#22c55e", "#f97316"];
+// Precomputed so SSR/CSR render identical markup (no Math.random in render).
+const CONFETTI_PIECES = Array.from({ length: 22 }, (_, i) => ({
+  left: (i * 137 + 29) % 100,
+  delay: (i % 7) * 0.5,
+  duration: 3.4 + (i % 5) * 0.6,
+  color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+  size: 6 + (i % 3) * 3,
+}));
+const FIREWORKS = [
+  { left: "8%", top: "12%", delay: "0s", color: "#e5a93b" },
+  { left: "80%", top: "8%", delay: "0.6s", color: "#ef4444" },
+  { left: "68%", top: "52%", delay: "1.2s", color: "#ffffff" },
+  { left: "18%", top: "58%", delay: "1.8s", color: "#e5a93b" },
+  { left: "45%", top: "20%", delay: "2.2s", color: "#22c55e" },
+];
+
+function ChampionCelebration({ category, rounds, standings, isCricket, isSetBased }) {
+  const matches = (rounds || []).flatMap((r) => r.matches || []);
+  if (matches.length === 0) return null;
+  if (!matches.every((m) => m.status === "COMPLETED")) return null;
+
+  const sortedRounds = [...rounds].sort((a, b) => a.number - b.number);
+  const lastRound = sortedRounds[sortedRounds.length - 1];
+  const lastRoundMatches = lastRound?.matches || [];
+  const finalMatch = lastRoundMatches[lastRoundMatches.length - 1] || null;
+  const isKnockoutFinal = lastRoundMatches.length === 1;
+
+  const setsWon = (match, teamId) =>
+    (match.matchSets || []).filter((s) => s.winnerId === teamId).length;
+
+  const finalScores = (match) => {
+    if (!match) return { a: 0, b: 0 };
+    if (isSetBased) {
+      return { a: setsWon(match, match.teamAId), b: setsWon(match, match.teamBId) };
+    }
+    return { a: match.scoreA || 0, b: match.scoreB || 0 };
+  };
+
+  // Champion: winner of the final when the last round is a single match,
+  // otherwise (league / round robin) top of the points table.
+  let winner = null;
+  let runnerUp = null;
+  if (finalMatch && isKnockoutFinal) {
+    let { a, b } = finalScores(finalMatch);
+    if (a === b && !isSetBased && !isCricket) {
+      a = finalMatch.penaltyScoreA || 0;
+      b = finalMatch.penaltyScoreB || 0;
+    }
+    if (a > b) {
+      winner = finalMatch.teamA;
+      runnerUp = finalMatch.teamB;
+    } else if (b > a) {
+      winner = finalMatch.teamB;
+      runnerUp = finalMatch.teamA;
+    }
+  }
+  if (!winner || isPlaceholderTeam(winner.name)) {
+    winner = standings[0] || null;
+    runnerUp = standings[1] || null;
+  }
+  if (!winner || isPlaceholderTeam(winner.name)) return null;
+
+  const winnerTeam = withTeamLogo(winner.teamObj || winner, category);
+  const runnerUpTeam = runnerUp
+    ? withTeamLogo(runnerUp.teamObj || runnerUp, category)
+    : null;
+
+  const { a: finalA, b: finalB } = finalScores(finalMatch);
+  const hasPens =
+    !isCricket &&
+    !isSetBased &&
+    finalMatch &&
+    ((finalMatch.penaltyScoreA || 0) > 0 || (finalMatch.penaltyScoreB || 0) > 0);
+
+  const roundLabel = lastRound
+    ? getRoundName(
+        lastRound.number,
+        sortedRounds.length,
+        category?.scheduleFormat,
+        lastRound.name
+      )
+    : "Final";
+
+  return (
+    <section className="relative overflow-hidden rounded-2xl border-2 border-mustard-gold bg-[#0a331f] text-white p-6 sm:p-10 shadow-lg animate-fadeIn">
+      {FIREWORKS.map((f, i) => (
+        <span
+          key={`fw-${i}`}
+          className="fp-firework"
+          style={{
+            left: f.left,
+            top: f.top,
+            animationDelay: f.delay,
+            background: `radial-gradient(circle, ${f.color} 0%, transparent 62%)`,
+          }}
+        />
+      ))}
+      {CONFETTI_PIECES.map((c, i) => (
+        <span
+          key={`cf-${i}`}
+          className="fp-confetti"
+          style={{
+            left: `${c.left}%`,
+            width: c.size,
+            height: c.size * 1.8,
+            background: c.color,
+            animationDelay: `${c.delay}s`,
+            animationDuration: `${c.duration}s`,
+          }}
+        />
+      ))}
+
+      <div className="relative z-10 flex flex-col items-center text-center gap-3 sm:gap-4">
+        <div className="inline-flex items-center gap-2 text-mustard-gold font-mono text-[10px] sm:text-xs font-bold uppercase tracking-[0.25em]">
+          <span className="w-1.5 h-1.5 rounded-full bg-mustard-gold" />
+          Tournament complete — {categoryDisplayName(category)}
+          <span className="w-1.5 h-1.5 rounded-full bg-mustard-gold" />
+        </div>
+
+        <div className="fp-champion-trophy">
+          <Trophy className="w-12 h-12 sm:w-16 sm:h-16 text-mustard-gold drop-shadow-[0_0_18px_rgba(229,169,59,0.55)]" />
+        </div>
+
+        <div className="flex flex-col items-center gap-2.5">
+          <TeamBadge team={winnerTeam} size="xl" />
+          <p className="text-[10px] font-mono font-bold uppercase tracking-[0.3em] text-mustard-gold">
+            Champions
+          </p>
+          <h2 className="text-3xl sm:text-5xl font-display uppercase tracking-wide drop-shadow">
+            {winnerTeam?.name}
+          </h2>
+          {runnerUpTeam && !isPlaceholderTeam(runnerUpTeam.name) && (
+            <p className="text-[10px] sm:text-xs font-mono text-white/60 uppercase tracking-widest">
+              Runners-up — {runnerUpTeam.name}
+            </p>
+          )}
+        </div>
+
+        {finalMatch && finalMatch.teamA && finalMatch.teamB && (
+          <div className="mt-2 w-full max-w-md bg-white/10 border border-mustard-gold/40 rounded-2xl px-4 py-3.5 backdrop-blur-sm">
+            <p className="text-[9px] font-mono font-bold uppercase tracking-[0.25em] text-mustard-gold mb-2.5">
+              {isKnockoutFinal ? roundLabel : "Last match"}
+            </p>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <TeamBadge team={withTeamLogo(finalMatch.teamA, category)} size="sm" />
+                <span className="text-xs sm:text-sm font-bold uppercase truncate">
+                  {finalMatch.teamA.name}
+                </span>
+              </div>
+              <div className="shrink-0 font-mono font-bold text-lg sm:text-xl bg-[#0d472c] border border-mustard-gold/50 rounded-xl px-3 py-1.5">
+                {isCricket
+                  ? `${finalMatch.scoreA || 0}/${finalMatch.wicketsA || 0} · ${finalMatch.scoreB || 0}/${finalMatch.wicketsB || 0}`
+                  : `${finalA} : ${finalB}`}
+              </div>
+              <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
+                <span className="text-xs sm:text-sm font-bold uppercase truncate text-right">
+                  {finalMatch.teamB.name}
+                </span>
+                <TeamBadge team={withTeamLogo(finalMatch.teamB, category)} size="sm" />
+              </div>
+            </div>
+            {hasPens && (
+              <p className="text-[9px] font-mono text-white/60 mt-2">
+                Penalties {finalMatch.penaltyScoreA || 0} – {finalMatch.penaltyScoreB || 0}
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function CricketScoreBlock({ match, teamId, compact }) {
   const tot = inningsTotals(match, teamId);
   const hasBatted = tot.legalBalls > 0 || tot.runs > 0 || tot.wickets > 0 || match.battingTeamId === teamId || match.status === "COMPLETED";
@@ -190,13 +365,15 @@ function BallDot({ ball, size = "md" }) {
   );
 }
 
-function CricketLiveCard({ match }) {
+function CricketLiveCard({ match, category }) {
   const allBalls = match.cricketBalls || [];
   const oversLimit = match.oversLimit || 20;
   const batting = match.battingTeamId;
+  const rosterA = category?.teams?.find((t) => t.id === match.teamAId);
+  const rosterB = category?.teams?.find((t) => t.id === match.teamBId);
   const allPlayers = [
-    ...(match.teamA?.players || []),
-    ...(match.teamB?.players || []),
+    ...(rosterA?.players || match.teamA?.players || []),
+    ...(rosterB?.players || match.teamB?.players || []),
   ];
 
   const findPlayer = (id) => allPlayers.find((p) => p.id === id);
@@ -328,6 +505,24 @@ function CricketLiveCard({ match }) {
               )
           )}
         </div>
+        {(match.manOfTheMatch || match.bestFielder) && (
+          <div className="border-t border-slate-100 px-3.5 py-3 space-y-1.5 bg-cream-bg/40">
+            {match.manOfTheMatch && (
+              <p className="text-[10px] font-mono text-deep-forest">
+                <span className="text-deep-forest/45 uppercase tracking-wider font-bold">Man of the Match</span>
+                {" · "}
+                <span className="font-bold text-mustard-gold">{match.manOfTheMatch.name}</span>
+              </p>
+            )}
+            {match.bestFielder && (
+              <p className="text-[10px] font-mono text-deep-forest">
+                <span className="text-deep-forest/45 uppercase tracking-wider font-bold">Best Fielder</span>
+                {" · "}
+                <span className="font-bold text-mustard-gold">{match.bestFielder.name}</span>
+              </p>
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -611,13 +806,40 @@ function CricketLiveCard({ match }) {
   );
 }
 
-function SetScoreBlock({ match, compact }) {
+function SetScoreBlock({ match, compact, sport = null }) {
   const sets = match.matchSets || [];
   const completedSets = sets.filter((s) => s.winnerId);
-  const currentSet = sets.find((s) => s.setNumber === match.currentSet);
+  const currentSet = sets.find((s) => s.setNumber === match.currentSet) || {
+    scoreA: 0,
+    scoreB: 0,
+  };
+  const isLive = match.status === "LIVE";
+  const unit = String(sport || "").toUpperCase() === "BADMINTON" ? "Games" : "Sets";
+  const unitOne = String(sport || "").toUpperCase() === "BADMINTON" ? "game" : "set";
 
   if (match.status === "SCHEDULED" && sets.length === 0) {
     return <span className="font-mono text-[10px] text-slate-400 uppercase">Upcoming</span>;
+  }
+
+  // Live: show rally points as the main score; sets/games won underneath
+  if (isLive) {
+    return (
+      <div className="text-center space-y-1">
+        <div className="flex items-center justify-center gap-1">
+          <span className={`font-mono font-bold text-white bg-[#0a331f] rounded-xl shadow border border-black inline-block ${compact ? "text-base px-2 py-1.5" : "text-xl sm:text-2xl px-3 py-2"}`}>
+            {currentSet.scoreA}
+          </span>
+          <span className="text-slate-300 font-mono text-xs">–</span>
+          <span className={`font-mono font-bold text-white bg-[#0a331f] rounded-xl shadow border border-black inline-block ${compact ? "text-base px-2 py-1.5" : "text-xl sm:text-2xl px-3 py-2"}`}>
+            {currentSet.scoreB}
+          </span>
+        </div>
+        <p className="text-[9px] font-mono text-deep-forest/50">
+          {unit} {match.scoreA}–{match.scoreB}
+          {currentSet.setNumber ? ` · ${unitOne} ${currentSet.setNumber}` : ""}
+        </p>
+      </div>
+    );
   }
 
   return (
@@ -631,11 +853,6 @@ function SetScoreBlock({ match, compact }) {
           {match.scoreB}
         </span>
       </div>
-      {currentSet && match.status === "LIVE" && (
-        <p className="text-[9px] font-mono text-deep-forest/50">
-          Set {currentSet.setNumber}: {currentSet.scoreA}–{currentSet.scoreB}
-        </p>
-      )}
       {completedSets.length > 0 && !compact && (
         <div className="flex flex-wrap gap-1 justify-center">
           {completedSets.map((s) => (
@@ -945,8 +1162,8 @@ function FootballLiveCard({ match, tournamentId = null, category = null }) {
 }
 
 /** Volleyball / Badminton / Pickleball live board */
-function SetBasedLiveCard({ match, sport }) {
-  const config = SPORT_CONFIGS[sport] || SPORT_CONFIGS.VOLLEYBALL;
+function SetBasedLiveCard({ match, sport, category = null }) {
+  const config = getConfig(sport, category) || SPORT_CONFIGS.VOLLEYBALL;
   const isLive = match.status === "LIVE";
   const isCompleted = match.status === "COMPLETED";
   const sets = [...(match.matchSets || [])].sort(
@@ -1003,21 +1220,47 @@ function SetBasedLiveCard({ match, sport }) {
           </div>
 
           <div className="text-center px-1">
-            <p className="text-[8px] font-mono text-white/40 uppercase tracking-wider mb-0.5">
-              Sets
-            </p>
-            <div className="flex items-baseline justify-center gap-1.5 font-mono font-bold tabular-nums">
-              <span className="text-3xl sm:text-4xl text-mustard-gold">
-                {match.scoreA}
-              </span>
-              <span className="text-white/35 text-lg">–</span>
-              <span className="text-3xl sm:text-4xl text-mustard-gold">
-                {match.scoreB}
-              </span>
-            </div>
-            <p className="text-[9px] font-mono text-white/40 mt-1">
-              First to {config.setsToWin}
-            </p>
+            {isLive ? (
+              <>
+                <p className="text-[8px] font-mono text-white/40 uppercase tracking-wider mb-0.5">
+                  {sport === "BADMINTON" ? "Game" : "Set"} {currentSetNum}
+                </p>
+                <div className="flex items-baseline justify-center gap-1.5 font-mono font-bold tabular-nums">
+                  <span className="text-3xl sm:text-4xl text-mustard-gold">
+                    {currentSet.scoreA}
+                  </span>
+                  <span className="text-white/35 text-lg">–</span>
+                  <span className="text-3xl sm:text-4xl text-mustard-gold">
+                    {currentSet.scoreB}
+                  </span>
+                </div>
+                <p className="text-[9px] font-mono text-white/50 mt-1">
+                  {sport === "BADMINTON" ? "Games" : "Sets"}{" "}
+                  <span className="font-bold text-white">
+                    {match.scoreA}–{match.scoreB}
+                  </span>
+                  <span className="text-white/35"> · to {target}</span>
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-[8px] font-mono text-white/40 uppercase tracking-wider mb-0.5">
+                  {sport === "BADMINTON" ? "Games" : "Sets"}
+                </p>
+                <div className="flex items-baseline justify-center gap-1.5 font-mono font-bold tabular-nums">
+                  <span className="text-3xl sm:text-4xl text-mustard-gold">
+                    {match.scoreA}
+                  </span>
+                  <span className="text-white/35 text-lg">–</span>
+                  <span className="text-3xl sm:text-4xl text-mustard-gold">
+                    {match.scoreB}
+                  </span>
+                </div>
+                <p className="text-[9px] font-mono text-white/40 mt-1">
+                  First to {config.setsToWin}
+                </p>
+              </>
+            )}
           </div>
 
           <div className="flex flex-col items-center gap-1.5 min-w-0 text-center">
@@ -1039,23 +1282,15 @@ function SetBasedLiveCard({ match, sport }) {
         </div>
       </div>
 
-      {/* Current set score */}
+      {/* Current set detail — only when not already shown as hero */}
       {isLive && (
-        <div className="px-3.5 py-4 bg-[#f8faf8] border-b border-slate-100 text-center">
-          <p className="text-[8px] font-mono uppercase tracking-widest text-slate-400 font-bold mb-2">
-            Set {currentSetNum} · Play to {target}
-            {config.winByTwo ? " (win by 2)" : ""}
+        <div className="px-3.5 py-3 bg-[#f8faf8] border-b border-slate-100 text-center">
+          <p className="text-[8px] font-mono uppercase tracking-widest text-slate-400 font-bold mb-1.5">
+            Play to {target}
+            {config.winByTwo ? " · win by 2" : ""}
+            {config.pointCap ? ` · cap ${config.pointCap}` : ""}
           </p>
-          <div className="flex items-center justify-center gap-4">
-            <span className="text-4xl font-mono font-bold text-deep-forest tabular-nums">
-              {currentSet.scoreA}
-            </span>
-            <span className="text-slate-300 font-mono text-xl">:</span>
-            <span className="text-4xl font-mono font-bold text-deep-forest tabular-nums">
-              {currentSet.scoreB}
-            </span>
-          </div>
-          <div className="mt-3 h-1.5 max-w-[200px] mx-auto bg-slate-200 rounded-full overflow-hidden flex">
+          <div className="h-1.5 max-w-[200px] mx-auto bg-slate-200 rounded-full overflow-hidden flex">
             <div
               className="h-full bg-[#0d472c] transition-all"
               style={{
@@ -1076,7 +1311,7 @@ function SetBasedLiveCard({ match, sport }) {
       {/* Set history */}
       <div className="px-3.5 py-3">
         <p className="text-[8px] font-mono uppercase tracking-widest text-slate-400 font-bold mb-2">
-          Set scores
+          {sport === "BADMINTON" ? "Game scores" : "Set scores"}
         </p>
         {sets.length === 0 ? (
           <p className="text-[10px] font-mono text-slate-400 text-center py-2">
@@ -1170,15 +1405,17 @@ function MatchCard({
 
   const teamA = withTeamLogo(match.teamA, category);
   const teamB = withTeamLogo(match.teamB, category);
-  const teamAPlayers = teamA?.players || match.teamA?.players || [];
-  const teamBPlayers = teamB?.players || match.teamB?.players || [];
+  const rosterA = category?.teams?.find((t) => t.id === match.teamAId);
+  const rosterB = category?.teams?.find((t) => t.id === match.teamBId);
+  const teamAPlayers = rosterA?.players || teamA?.players || match.teamA?.players || [];
+  const teamBPlayers = rosterB?.players || teamB?.players || match.teamB?.players || [];
   const badgeSize = isLive && !compact ? "xl" : compact ? "sm" : "md";
   const sportKey = category?.sport || "FOOTBALL";
 
   const liveBoard = isCricket ? (
-    <CricketLiveCard match={match} />
+    <CricketLiveCard match={match} category={category} />
   ) : isSetBased ? (
-    <SetBasedLiveCard match={match} sport={sportKey} />
+    <SetBasedLiveCard match={match} sport={sportKey} category={category} />
   ) : (
     <FootballLiveCard
       match={match}
@@ -1267,6 +1504,15 @@ function MatchCard({
         >
           {isLive ? "● LIVE" : match.status}
         </span>
+        {!isLive && !isCompleted && match.scheduledAt ? (
+          <span
+            className="inline-flex items-center gap-1 text-[9px] font-mono font-bold px-2 py-1 rounded-md border tracking-wider bg-mustard-gold/15 text-deep-forest border-mustard-gold/40 shrink-0"
+            title="Planned start time"
+          >
+            <Clock className="w-3 h-3 opacity-70" />
+            {formatScheduledAt(match.scheduledAt)}
+          </span>
+        ) : null}
         <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
           {isCricket && match.oversLimit ? (
             <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-deep-forest/60 bg-cream-bg border border-slate-200 rounded-md px-2 py-0.5">
@@ -1344,7 +1590,7 @@ function MatchCard({
                     {teamA?.name}
                   </span>
                 </div>
-                <SetScoreBlock match={match} compact={compact} />
+                <SetScoreBlock match={match} compact={compact} sport={sportKey} />
                 <div className="flex flex-col items-center gap-2 min-w-0">
                   <TeamBadge team={teamB} size={badgeSize} />
                   <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wide line-clamp-2 leading-tight">
@@ -1417,6 +1663,10 @@ export default function PublicLiveBoard() {
   const defaultSectionSetRef = useRef(false);
   const serverTimeRef = useRef(null);
   const deltaFailRef = useRef(0);
+  const hasLiveMatchRef = useRef(false);
+  const snapshotInFlightRef = useRef(false);
+  const deltaInFlightRef = useRef(false);
+  const pollTicksRef = useRef(0);
 
   const selectCategory = (catId) => {
     userPickedCategoryRef.current = true;
@@ -1453,6 +1703,7 @@ export default function PublicLiveBoard() {
     }
 
     const liveCount = liveInAny.length;
+    hasLiveMatchRef.current = liveCount > 0;
     if (liveCount > 0 && prevLiveCountRef.current === 0) {
       setSection("live");
     }
@@ -1503,6 +1754,8 @@ export default function PublicLiveBoard() {
   /** Full snapshot bootstrap (and rare fallback). */
   const fetchSnapshot = useCallback(
     async ({ silent = false } = {}) => {
+      if (snapshotInFlightRef.current) return null;
+      snapshotInFlightRef.current = true;
       try {
         const res = await fetch(`/api/tournaments/${id}?view=live`, {
           cache: "no-store",
@@ -1519,6 +1772,7 @@ export default function PublicLiveBoard() {
         if (!silent) setError(err.message);
         return null;
       } finally {
+        snapshotInFlightRef.current = false;
         if (!silent) setLoading(false);
       }
     },
@@ -1527,6 +1781,8 @@ export default function PublicLiveBoard() {
 
   /** Cheap incremental poll — LIVE + recently changed matches only. */
   const fetchDelta = useCallback(async () => {
+    if (deltaInFlightRef.current) return;
+    deltaInFlightRef.current = true;
     try {
       const since = serverTimeRef.current
         ? encodeURIComponent(serverTimeRef.current)
@@ -1549,10 +1805,11 @@ export default function PublicLiveBoard() {
     } catch (err) {
       console.warn("Live delta failed:", err?.message || err);
       deltaFailRef.current += 1;
-      // After 3 failed deltas, fall back to a full snapshot
       if (deltaFailRef.current >= 3) {
         await fetchSnapshot({ silent: true });
       }
+    } finally {
+      deltaInFlightRef.current = false;
     }
   }, [id, syncBoardMeta, fetchSnapshot]);
 
@@ -1560,28 +1817,68 @@ export default function PublicLiveBoard() {
     fetchSnapshot();
   }, [fetchSnapshot]);
 
-  // Bootstrap once, then poll deltas every 4s (full snapshot every ~60s as safety net)
+  // Bootstrap once, then poll deltas without pile-up
   useEffect(() => {
-    let ticks = 0;
-    const tick = () => {
-      if (typeof document !== "undefined" && document.hidden) return;
-      ticks += 1;
-      if (ticks % 15 === 0) {
-        fetchSnapshot({ silent: true });
-      } else {
-        fetchDelta();
+    let cancelled = false;
+    let timer = null;
+
+    const tick = async () => {
+      if (cancelled) return;
+      if (typeof document !== "undefined" && document.hidden) {
+        timer = setTimeout(tick, 3000);
+        return;
+      }
+
+      pollTicksRef.current += 1;
+      const snapshotEvery = hasSupabaseRealtimeEnv() ? 40 : 20;
+      try {
+        if (pollTicksRef.current % snapshotEvery === 0) {
+          await fetchSnapshot({ silent: true });
+        } else {
+          await fetchDelta();
+        }
+      } catch {
+        /* handled inside fetch helpers */
+      }
+
+      if (!cancelled) {
+        const intervalMs = hasLiveMatchRef.current ? 2000 : 4000;
+        timer = setTimeout(tick, intervalMs);
       }
     };
-    const timer = setInterval(tick, 4000);
+
+    timer = setTimeout(tick, 2500);
+
     const onVis = () => {
       if (!document.hidden) fetchDelta();
     };
     document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", onVis);
     return () => {
-      clearInterval(timer);
+      cancelled = true;
+      clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("focus", onVis);
     };
   }, [fetchDelta, fetchSnapshot]);
+
+  const boardMatchIds = useMemo(() => {
+    const ids = new Set();
+    for (const cat of tournament?.categories || []) {
+      for (const round of cat.rounds || []) {
+        for (const match of round.matches || []) {
+          ids.add(match.id);
+        }
+      }
+    }
+    return ids;
+  }, [tournament]);
+
+  useMatchRealtime({
+    enabled: !!tournament,
+    onChange: fetchDelta,
+    matchIds: boardMatchIds.size > 0 ? boardMatchIds : null,
+  });
 
   if (loading) {
     return (
@@ -1651,7 +1948,7 @@ export default function PublicLiveBoard() {
 
   const isCricket = activeCategory?.sport === "CRICKET";
   const isSetBased = isSetBasedSport(activeCategory?.sport);
-  const sportConfig = isSetBased ? SPORT_CONFIGS[activeCategory?.sport] : null;
+  const sportConfig = isSetBased ? getConfig(activeCategory?.sport, activeCategory) : null;
 
   const footballStandings = calculateStandings(activeCategory);
   const cricketStandings = calculateCricketStandings(activeCategory).filter(
@@ -1668,7 +1965,7 @@ export default function PublicLiveBoard() {
   const topScorers = calculateTopScorers(activeCategory);
   const cricketLeaders = isCricket
     ? calculateCricketLeaders(activeCategory)
-    : { runScorers: [], wicketTakers: [] };
+    : { runScorers: [], wicketTakers: [], bestFielders: [] };
 
   const sections = [
     {
@@ -1692,7 +1989,9 @@ export default function PublicLiveBoard() {
             label: isCricket ? "Leaders" : "Top Scorers",
             icon: Award,
             count: isCricket
-              ? cricketLeaders.runScorers.length + cricketLeaders.wicketTakers.length
+              ? cricketLeaders.runScorers.length +
+                cricketLeaders.wicketTakers.length +
+                (cricketLeaders.bestFielders?.length || 0)
               : topScorers.length,
           },
         ]
@@ -1734,6 +2033,7 @@ export default function PublicLiveBoard() {
                       <span className="text-white/40 hidden sm:inline">•</span>
                       <span className="text-white/60 normal-case tracking-normal w-full sm:w-auto">
                         Updated {updatedAt.toLocaleTimeString()}
+                        {hasSupabaseRealtimeEnv() ? " · live sync" : " · fast poll"}
                       </span>
                     </>
                   )}
@@ -1899,6 +2199,14 @@ export default function PublicLiveBoard() {
       )}
 
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 py-6 sm:py-8 space-y-8 sm:space-y-10">
+        <ChampionCelebration
+          category={activeCategory}
+          rounds={rounds}
+          standings={standings}
+          isCricket={isCricket}
+          isSetBased={isSetBased}
+        />
+
         {section === "clubs" && (
           <section className="space-y-5 animate-fadeIn">
             <div className="flex items-center gap-3 flex-wrap">
@@ -2336,6 +2644,44 @@ export default function PublicLiveBoard() {
                           <td className="py-3 px-4 font-sans font-bold">{p.name}</td>
                           <td className="py-3 px-4 uppercase">{p.teamName}</td>
                           <td className="py-3 px-4 text-center font-bold">{p.wickets}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div>
+              <h2 className="text-xs font-mono font-bold uppercase tracking-widest text-deep-forest/60">
+                Best fielders — {activeCategory?.name}
+              </h2>
+              <p className="text-[10px] font-mono text-deep-forest/45 mt-1">
+                Catches, run-outs & stumpings
+              </p>
+              {(cricketLeaders.bestFielders || []).length === 0 ? (
+                <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl py-12 text-center mt-4">
+                  <p className="text-xs font-mono text-deep-forest/50">No fielding dismissals recorded yet</p>
+                </div>
+              ) : (
+                <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl overflow-hidden shadow-sm mt-4">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead>
+                      <tr className="bg-[#082e1c] text-[10px] text-white uppercase font-bold">
+                        <th className="py-3 px-4 w-12">#</th>
+                        <th className="py-3 px-4">Player</th>
+                        <th className="py-3 px-4">Club</th>
+                        <th className="py-3 px-4 text-center">Field</th>
+                        <th className="py-3 px-4 text-center">Awards</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#faf6ee]">
+                      {cricketLeaders.bestFielders.slice(0, 20).map((p, idx) => (
+                        <tr key={p.id} className="bg-[#fcf7ed]">
+                          <td className="py-3 px-4 font-bold">{idx + 1}</td>
+                          <td className="py-3 px-4 font-sans font-bold">{p.name}</td>
+                          <td className="py-3 px-4 uppercase">{p.teamName}</td>
+                          <td className="py-3 px-4 text-center font-bold">{p.dismissals}</td>
+                          <td className="py-3 px-4 text-center font-bold">{p.awards}</td>
                         </tr>
                       ))}
                     </tbody>

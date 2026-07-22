@@ -29,7 +29,9 @@ import {
   completedFootballClockLabel,
 } from "@/lib/footballClock";
 import {
+  eventDedupKey,
   mergeMatchFromApi,
+  normalizeMatchEvents,
   patchMatchInTournament,
   stripDeletedEvents,
   shouldAcceptServerMatch,
@@ -40,6 +42,7 @@ import {
   getScoreLockToken,
   isCasConflict,
 } from "@/lib/matchCasClient";
+import { resolveTeamLogo } from "@/lib/teamLogo";
 
 const getRoundName = (number, totalRounds, format, customName) =>
   getRoundDisplayName(number, totalRounds, format, customName);
@@ -72,16 +75,41 @@ function findMatchContext(tournament, matchId) {
   return null;
 }
 
-function TeamCrest({ team, size = "lg" }) {
+/** Minimal tournament tree so the scorer can render before the full dashboard loads. */
+function tournamentShellFromMatch(match, tournamentId) {
+  if (!match?.round?.category) return null;
+  const category = match.round.category;
+  const teams = [match.teamA, match.teamB].filter(Boolean);
+  return {
+    id: tournamentId,
+    categories: [
+      {
+        ...category,
+        teams,
+        rounds: [
+          {
+            id: match.round.id,
+            number: match.round.number,
+            name: match.round.name,
+            matches: [match],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function TeamCrest({ team, category = null, size = "lg" }) {
   const sizes = {
     md: "w-12 h-12 sm:w-14 sm:h-14 text-sm",
     lg: "w-14 h-14 sm:w-20 sm:h-24 text-base sm:text-xl",
   };
-  if (team?.logoUrl) {
+  const logo = resolveTeamLogo(team, category);
+  if (logo) {
     return (
       <img
-        src={team.logoUrl}
-        alt={team.name}
+        src={logo}
+        alt={team?.name}
         className={`${sizes[size]} rounded-full object-cover border-2 border-white/30 shadow-lg`}
       />
     );
@@ -149,25 +177,51 @@ export default function MatchScorerPage() {
     });
   }, []);
 
-  /** Initial load only — full tournament for category / round context. */
+  /** Initial load — match API first for fast paint, full tournament in parallel. */
   const fetchTournament = useCallback(
     async ({ silent = false } = {}) => {
       const gen = ++fetchGenRef.current;
       try {
         if (!silent) setLoading(true);
-        const res = await fetch(`/api/tournaments/${tournamentId}`, {
+
+        const matchPromise = fetch(`/api/matches/${matchId}`, {
           cache: "no-store",
           credentials: "include",
         });
-        if (!res.ok) throw new Error("Tournament not found");
-        const data = await res.json();
+        const tournamentPromise = fetch(`/api/tournaments/${tournamentId}`, {
+          cache: "no-store",
+          credentials: "include",
+        });
+
+        const matchRes = await matchPromise;
         if (gen !== fetchGenRef.current) return null;
+
+        if (matchRes.ok) {
+          const matchData = await matchRes.json();
+          const shell = tournamentShellFromMatch(matchData, tournamentId);
+          if (shell) {
+            setTournament((prev) => {
+              if (!prev) return stripDeletedEvents(shell, deletedEventIdsRef.current);
+              return prev;
+            });
+            setSelectedEventTeamId((prev) => prev || matchData.teamAId);
+            if (!silent) setLoading(false);
+          }
+        }
+
+        const res = await tournamentPromise;
+        if (gen !== fetchGenRef.current) return null;
+        if (!res.ok) {
+          if (!matchRes.ok) throw new Error("Tournament not found");
+          return null;
+        }
+
+        const data = await res.json();
 
         setTournament((prev) => {
           if (!prev) {
             return stripDeletedEvents(data, deletedEventIdsRef.current);
           }
-          // Versioned merge: never let a stale full GET clobber the active match.
           const merged = stripDeletedEvents(data, deletedEventIdsRef.current);
           return patchMatchInTournament(merged, matchId, (incoming) => {
             const local = findMatchContext(prev, matchId)?.match;
@@ -215,7 +269,7 @@ export default function MatchScorerPage() {
       setTournament((prev) =>
         patchMatchInTournament(prev, matchId, (local) => {
           if (pendingWritesRef.current > 0) return local;
-          if (!shouldAcceptServerMatch(local, data)) return local;
+          // Intentional match refresh — always take server as source of truth
           const merged = mergeMatchFromApi(local, data, { force: true });
           const events = (merged.events || []).filter(
             (e) => !deletedEventIdsRef.current.has(e.id)
@@ -311,24 +365,27 @@ export default function MatchScorerPage() {
             updatedAt: update?.updatedAt || new Date().toISOString(),
           };
           let next = mergeMatchFromApi(m, stamped, { force });
-          if (addEvent) {
-            next = {
-              ...next,
-              events: [
-                addEvent,
-                ...(next.events || m.events || []).filter(
-                  (e) => e.id !== addEvent.id
-                ),
-              ],
-            };
-          }
+          let events = next.events || m.events || [];
+
           if (removeEventId) {
-            next = {
-              ...next,
-              events: (next.events || m.events || []).filter(
-                (e) => e.id !== removeEventId
-              ),
-            };
+            events = events.filter((e) => e.id !== removeEventId);
+          }
+          if (addEvent) {
+            const isSavedRow =
+              addEvent.id && !String(addEvent.id).startsWith("tmp_");
+            events = events.filter((e) => e.id !== addEvent.id);
+            if (isSavedRow) {
+              // Drop any optimistic placeholder for the same goal/card.
+              events = events.filter(
+                (e) =>
+                  !String(e.id).startsWith("tmp_") ||
+                  eventDedupKey(e) !== eventDedupKey(addEvent)
+              );
+            }
+            events = [...events, addEvent];
+          }
+          if (addEvent || removeEventId) {
+            next = { ...next, events: normalizeMatchEvents(events) };
           }
           if (next?.version != null) {
             matchCasRef.current.version = next.version;
@@ -745,13 +802,14 @@ export default function MatchScorerPage() {
 
   const handleAddEvent = async (e) => {
     e.preventDefault();
-    if (!match) return;
+    if (!match || submittingEvent) return;
     if (!eventPlayerId) {
       alert("Please select a player associated with the event.");
       return;
     }
 
     await withWrite(async () => {
+      let tempEventId = null;
       try {
         setSubmittingEvent(true);
 
@@ -780,6 +838,48 @@ export default function MatchScorerPage() {
               : "A";
         }
 
+        const t = String(eventType || "").toUpperCase();
+        let optA = match.scoreA || 0;
+        let optB = match.scoreB || 0;
+        let optPenA = match.penaltyScoreA || 0;
+        let optPenB = match.penaltyScoreB || 0;
+        if (t === "GOAL" || t === "PENALTY_GOAL") {
+          if (side === "A") optA += 1;
+          else optB += 1;
+        } else if (t === "OWN_GOAL") {
+          if (side === "A") optB += 1;
+          else optA += 1;
+        } else if (t === "SHOOTOUT_SCORED") {
+          if (side === "A") optPenA += 1;
+          else optPenB += 1;
+        }
+
+        const players =
+          side === "A" ? match.teamA?.players || [] : match.teamB?.players || [];
+        const player = players.find((p) => p.id === eventPlayerId) || null;
+        tempEventId = `tmp_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const tempEvent = {
+          id: tempEventId,
+          type: t,
+          teamId: eventTeamId,
+          playerId: eventPlayerId,
+          player,
+          minute: eventMinute
+            ? parseInt(eventMinute, 10)
+            : suggestedMinute,
+          createdAt: new Date().toISOString(),
+        };
+        applyMatchUpdate(
+          {
+            scoreA: optA,
+            scoreB: optB,
+            penaltyScoreA: optPenA,
+            penaltyScoreB: optPenB,
+            status: match.status === "SCHEDULED" ? "LIVE" : match.status,
+          },
+          { addEvent: tempEvent }
+        );
+
         const res = await fetch(`/api/matches/${matchId}/events`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -800,13 +900,17 @@ export default function MatchScorerPage() {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           if (isCasConflict(res, data) && data?.match) {
-            applyMatchUpdate(data.match);
+            applyMatchUpdate(data.match, { removeEventId: tempEventId });
           }
           throw new Error(casErrorMessage(res, data, "Failed to record event"));
         }
 
         if (data.match) {
-          applyMatchUpdate(data.match, { addEvent: data.event });
+          // Replace optimistic tmp row with the saved DB event (same goal, one row).
+          applyMatchUpdate(data.match, {
+            addEvent: data.event,
+            removeEventId: tempEventId,
+          });
         } else {
           await refreshMatch();
         }
@@ -824,6 +928,35 @@ export default function MatchScorerPage() {
   const handleDeleteEvent = async (eventId) => {
     if (!eventId || !match) return;
     if (!window.confirm("Delete this event? Score will update.")) return;
+
+    // Optimistic preview never hit the DB — drop locally and undo score bump.
+    if (String(eventId).startsWith("tmp_")) {
+      const event = (match.events || []).find((e) => e.id === eventId);
+      const t = String(event?.type || "").toUpperCase();
+      let scoreA = match.scoreA;
+      let scoreB = match.scoreB;
+      let penaltyScoreA = match.penaltyScoreA ?? 0;
+      let penaltyScoreB = match.penaltyScoreB ?? 0;
+
+      if (event) {
+        if (t === "GOAL" || t === "PENALTY_GOAL") {
+          if (event.teamId === match.teamAId) scoreA = Math.max(0, scoreA - 1);
+          else if (event.teamId === match.teamBId) scoreB = Math.max(0, scoreB - 1);
+        } else if (t === "OWN_GOAL") {
+          if (event.teamId === match.teamAId) scoreB = Math.max(0, scoreB - 1);
+          else if (event.teamId === match.teamBId) scoreA = Math.max(0, scoreA - 1);
+        } else if (t === "SHOOTOUT_SCORED") {
+          if (event.teamId === match.teamAId) penaltyScoreA = Math.max(0, penaltyScoreA - 1);
+          else if (event.teamId === match.teamBId) penaltyScoreB = Math.max(0, penaltyScoreB - 1);
+        }
+      }
+
+      applyMatchUpdate(
+        { scoreA, scoreB, penaltyScoreA, penaltyScoreB },
+        { removeEventId: eventId }
+      );
+      return;
+    }
 
     const event = (match.events || []).find((e) => e.id === eventId);
     const t = String(event?.type || "").toUpperCase();
@@ -1459,7 +1592,7 @@ export default function MatchScorerPage() {
 
           <div className="grid grid-cols-3 items-center gap-2 sm:gap-6 text-center">
             <div className="flex flex-col items-center gap-2 sm:gap-3 min-w-0">
-              <TeamCrest team={match.teamA} />
+              <TeamCrest team={match.teamA} category={category} />
               <h2 className="text-[10px] sm:text-base font-bold uppercase tracking-wider leading-tight px-0.5 line-clamp-2 break-words">
                 {match.teamA?.name}
               </h2>
@@ -1478,7 +1611,7 @@ export default function MatchScorerPage() {
             </div>
 
             <div className="flex flex-col items-center gap-2 sm:gap-3 min-w-0">
-              <TeamCrest team={match.teamB} />
+              <TeamCrest team={match.teamB} category={category} />
               <h2 className="text-[10px] sm:text-base font-bold uppercase tracking-wider leading-tight px-0.5 line-clamp-2 break-words">
                 {match.teamB?.name}
               </h2>

@@ -4,6 +4,7 @@ import {
   isKnockoutWinnerPlaceholder,
   normalizeScheduleFormat,
 } from "@/lib/scheduleFormats";
+import { requireTournamentAccess } from "@/lib/accessControl";
 
 async function resolveMatchTeamIds(categoryId, match) {
   async function resolveSide(idKey, nameKey) {
@@ -28,6 +29,13 @@ async function resolveMatchTeamIds(categoryId, match) {
   return { teamAId, teamBId };
 }
 
+/** Optional planned start time picked by the admin (e.g. Final at 5 PM). */
+function parseScheduledAt(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 /** Remove auto-created knockout winner placeholders that are no longer needed. */
 async function cleanupKnockoutPlaceholders(categoryId) {
   const placeholders = await prisma.team.findMany({
@@ -45,8 +53,11 @@ async function cleanupKnockoutPlaceholders(categoryId) {
 }
 
 export async function POST(request, { params }) {
+  const { id: tournamentId } = await params;
+  const gate = await requireTournamentAccess(request, tournamentId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: tournamentId } = await params;
     const body = await request.json();
     const { rounds, categoryId, format, mode = "replace" } = body;
 
@@ -110,6 +121,7 @@ export async function POST(request, { params }) {
           scoreA: 0,
           scoreB: 0,
           oversLimit,
+          scheduledAt: parseScheduledAt(m.scheduledAt),
         });
       }
 
@@ -158,6 +170,7 @@ export async function POST(request, { params }) {
           scoreA: 0,
           scoreB: 0,
           oversLimit,
+          scheduledAt: parseScheduledAt(m.scheduledAt),
         });
       }
 

@@ -16,7 +16,8 @@ import {
   calculateCricketStandings,
 } from "@/lib/cricket";
 import { uploadImageToSupabase } from "@/lib/imageUpload";
-import { categoryDisplayName, isCricketSport, isSetBasedSport, isSinglesCategory, isDoublesOrMixedCategory, entryLabel, entryLabelPlural, entryAvatarUrl } from "@/lib/sports";
+import { formatScheduledAt } from "@/lib/tournamentDate";
+import { categoryDisplayName, isCricketSport, isSetBasedSport, isSinglesCategory, isDoublesOrMixedCategory, entryLabel, entryLabelPlural, resolveTeamLogo } from "@/lib/sports";
 import { calculateSetBasedStandings } from "@/lib/setBasedSports";
 import { isPlaceholderTeam, buildFootballStandings } from "@/lib/tournamentResolver";
 import {
@@ -35,9 +36,20 @@ import {
   footballClockOpts,
   completedFootballClockLabel,
 } from "@/lib/footballClock";
+import { useSequentialPoll } from "@/hooks/useSequentialPoll";
 
 const getRoundName = (number, totalRounds, format, customName) =>
   getRoundDisplayName(number, totalRounds, format, customName);
+
+/** ISO/date → value for <input type="datetime-local"> in the admin's timezone. */
+function toDateTimeInputValue(dateLike) {
+  if (!dateLike) return "";
+  const d = new Date(dateLike);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 
 function matchCardClockLabel(match, now = Date.now(), category = null, tournamentId = null) {
   if (!match) return null;
@@ -181,8 +193,50 @@ export default function TournamentDashboard() {
   // Manual Scheduler State
   const [schedulerMode, setSchedulerMode] = useState("auto"); // auto, manual
   const [scheduleFormat, setScheduleFormat] = useState("ROUND_ROBIN");
-  const [manualRounds, setManualRounds] = useState([{ number: 1, name: "Round 1", matches: [{ teamAId: "", teamBId: "" }] }]);
+  const [manualRounds, setManualRounds] = useState([{ number: 1, name: "Round 1", matches: [{ teamAId: "", teamBId: "", scheduledAt: "" }] }]);
   const [savingSchedule, setSavingSchedule] = useState(false);
+
+  const fetchDetailsRef = useRef(null);
+
+  async function fetchTournamentDetails({ silent = false } = {}) {
+    try {
+      if (!silent) setLoading(true);
+      const res = await fetch(`/api/tournaments/${id}`, { cache: "no-store" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(
+          body?.detail || body?.error || `Tournament load failed (${res.status})`
+        );
+      }
+      const data = await res.json();
+      setTournament(data);
+      setActiveCategoryId((prev) => {
+        let stored = null;
+        if (typeof window !== "undefined" && categoryStorageKey) {
+          try {
+            stored = window.localStorage.getItem(categoryStorageKey);
+          } catch {
+            stored = null;
+          }
+        }
+        if (prev && data.categories?.some((c) => c.id === prev)) return prev;
+        if (stored && data.categories?.some((c) => c.id === stored)) return stored;
+        return data.categories?.[0]?.id || null;
+      });
+      return data;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    } finally {
+      if (!silent) setLoading(false);
+    }
+  }
+  fetchDetailsRef.current = fetchTournamentDetails;
+
+  useSequentialPoll(
+    () => fetchDetailsRef.current?.({ silent: true }),
+    10000
+  );
 
   useEffect(() => {
     fetchTournamentDetails();
@@ -217,35 +271,6 @@ export default function TournamentDashboard() {
       setActiveTab("standings");
     }
   }, [tournament, activeCategoryId, activeTab]);
-
-  const fetchTournamentDetails = async ({ silent = false } = {}) => {
-    try {
-      if (!silent) setLoading(true);
-      const res = await fetch(`/api/tournaments/${id}`, { cache: "no-store" });
-      if (!res.ok) throw new Error("Tournament not found");
-      const data = await res.json();
-      setTournament(data);
-      setActiveCategoryId((prev) => {
-        let stored = null;
-        if (typeof window !== "undefined" && categoryStorageKey) {
-          try {
-            stored = window.localStorage.getItem(categoryStorageKey);
-          } catch {
-            stored = null;
-          }
-        }
-        if (prev && data.categories?.some((c) => c.id === prev)) return prev;
-        if (stored && data.categories?.some((c) => c.id === stored)) return stored;
-        return data.categories?.[0]?.id || null;
-      });
-      return data;
-    } catch (err) {
-      setError(err.message);
-      return null;
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  };
 
   const handleBack = () => {
     startTransition(() => {
@@ -770,6 +795,7 @@ export default function TournamentDashboard() {
       const res = await fetch(`/api/tournaments/${id}/schedule`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           rounds,
           categoryId: cat.id,
@@ -830,6 +856,7 @@ export default function TournamentDashboard() {
       const res = await fetch(`/api/tournaments/${id}/schedule`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           rounds: [round],
           categoryId: cat.id,
@@ -850,7 +877,7 @@ export default function TournamentDashboard() {
   // Add Match to Manual Round Form
   const addManualMatch = (rIndex) => {
     const updated = [...manualRounds];
-    updated[rIndex].matches.push({ teamAId: "", teamBId: "" });
+    updated[rIndex].matches.push({ teamAId: "", teamBId: "", scheduledAt: "" });
     setManualRounds(updated);
   };
 
@@ -861,6 +888,43 @@ export default function TournamentDashboard() {
     setManualRounds(updated);
   };
 
+  // TBD slots are encoded as "name:<placeholder>" in the manual dropdowns.
+  const decodeManualSide = (value) =>
+    String(value || "").startsWith("name:")
+      ? { name: String(value).slice(5) }
+      : { id: value };
+
+  /** Map renamed placeholders ("TBD (1st Place)") back to canonical names the resolver understands. */
+  const canonicalPlaceholderName = (name) => {
+    const w = String(name || "").match(/winner\s*r(\d+)\s*m(\d+)/i);
+    if (w) return `Winner R${w[1]}M${w[2]}`;
+    const n = String(name || "").toLowerCase();
+    if (n.includes("1st")) return "1st placed team";
+    if (n.includes("2nd")) return "2nd placed team";
+    if (n.includes("3rd")) return "3rd placed team";
+    if (n.includes("4th")) return "4th placed team";
+    return String(name || "TBD");
+  };
+
+  /** Placeholder choices for a manual round: seeds + winners of earlier rounds. */
+  const manualPlaceholderOptions = (rIndex) => {
+    const opts = [
+      { value: "name:1st placed team", label: "TBD — 1st placed team" },
+      { value: "name:2nd placed team", label: "TBD — 2nd placed team" },
+      { value: "name:3rd placed team", label: "TBD — 3rd placed team" },
+      { value: "name:4th placed team", label: "TBD — 4th placed team" },
+    ];
+    for (let r = 0; r < rIndex; r++) {
+      (manualRounds[r]?.matches || []).forEach((_, mi) => {
+        opts.push({
+          value: `name:Winner R${r + 1}M${mi + 1}`,
+          label: `TBD — Winner of Round ${r + 1} Match ${mi + 1}`,
+        });
+      });
+    }
+    return opts;
+  };
+
   // Load current schedule into manual rounds
   const loadExistingIntoManual = () => {
     const cat = getActiveCategory();
@@ -868,12 +932,21 @@ export default function TournamentDashboard() {
       alert("No current schedule to load for this category.");
       return;
     }
+    const teamById = Object.fromEntries((cat.teams || []).map((t) => [t.id, t]));
+    const sideValue = (teamId) => {
+      const slot = teamById[teamId];
+      if (slot && isPlaceholderTeam(slot._sourceName || slot.name)) {
+        return `name:${canonicalPlaceholderName(slot._sourceName || slot.name)}`;
+      }
+      return teamId;
+    };
     const mapped = cat.rounds.map(r => ({
       number: r.number,
       name: r.name || `Round ${r.number}`,
       matches: r.matches.map(m => ({
-        teamAId: m.teamAId,
-        teamBId: m.teamBId
+        teamAId: sideValue(m.teamAId),
+        teamBId: sideValue(m.teamBId),
+        scheduledAt: toDateTimeInputValue(m.scheduledAt),
       }))
     }));
     setManualRounds(mapped);
@@ -882,7 +955,7 @@ export default function TournamentDashboard() {
   // Add Round to Manual Form
   const addManualRound = () => {
     const n = manualRounds.length + 1;
-    setManualRounds([...manualRounds, { number: n, name: `Round ${n}`, matches: [{ teamAId: "", teamBId: "" }] }]);
+    setManualRounds([...manualRounds, { number: n, name: `Round ${n}`, matches: [{ teamAId: "", teamBId: "", scheduledAt: "" }] }]);
   };
 
   // Remove Round from Manual Form
@@ -924,23 +997,42 @@ export default function TournamentDashboard() {
       for (const r of manualRounds) {
         for (const m of r.matches) {
           if (!m.teamAId || !m.teamBId) {
-            throw new Error("All matches must have both teams selected.");
+            throw new Error("All matches must have both sides selected (club or TBD).");
           }
           if (m.teamAId === m.teamBId) {
-            throw new Error("A team cannot play against itself.");
+            throw new Error("A match cannot have the same club or TBD slot on both sides.");
           }
         }
       }
 
+      // datetime-local values are in the admin's timezone — send as ISO.
+      // TBD selections go as teamAName/teamBName so the API creates placeholder slots.
+      const roundsPayload = manualRounds.map((r) => ({
+        number: r.number,
+        name: r.name,
+        matches: r.matches.map((m) => {
+          const a = decodeManualSide(m.teamAId);
+          const b = decodeManualSide(m.teamBId);
+          return {
+            ...(a.id ? { teamAId: a.id } : { teamAName: a.name }),
+            ...(b.id ? { teamBId: b.id } : { teamBName: b.name }),
+            scheduledAt: m.scheduledAt
+              ? new Date(m.scheduledAt).toISOString()
+              : null,
+          };
+        }),
+      }));
+
       const res = await fetch(`/api/tournaments/${id}/schedule`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rounds: manualRounds, categoryId: cat.id }),
+        credentials: "include",
+        body: JSON.stringify({ rounds: roundsPayload, categoryId: cat.id }),
       });
 
       if (!res.ok) throw new Error("Failed to save schedule");
       await fetchTournamentDetails({ silent: true });
-      setManualRounds([{ number: 1, name: "Round 1", matches: [{ teamAId: "", teamBId: "" }] }]);
+      setManualRounds([{ number: 1, name: "Round 1", matches: [{ teamAId: "", teamBId: "", scheduledAt: "" }] }]);
       setActiveTab("dashboard");
     } catch (err) {
       alert(err.message);
@@ -1170,7 +1262,7 @@ export default function TournamentDashboard() {
   const topScorers = isSetBased ? [] : calculateTopScorers();
   const cricketLeaders = isCricket
     ? calculateCricketLeaders(activeCategory)
-    : { runScorers: [], wicketTakers: [] };
+    : { runScorers: [], wicketTakers: [], bestFielders: [] };
   const liveMatches = categoryRounds.flatMap(r => r.matches).filter(m => m.status === "LIVE");
 
   return (
@@ -1425,6 +1517,15 @@ export default function TournamentDashboard() {
                                     ) : null}
                                   </span>
                                 )}
+                                {isScheduled && match.scheduledAt && (
+                                  <span
+                                    className="inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-1 rounded-lg border bg-mustard-gold/15 text-deep-forest border-mustard-gold/40"
+                                    title="Planned start time"
+                                  >
+                                    <Clock className="w-3 h-3 shrink-0 opacity-70" />
+                                    {formatScheduledAt(match.scheduledAt)}
+                                  </span>
+                                )}
                               </div>
                               {isLive && (
                                 <div className="flex items-center gap-1.5 text-[9px] text-red-650 font-mono font-bold animate-pulse shrink-0">
@@ -1436,11 +1537,11 @@ export default function TournamentDashboard() {
 
                             {/* Score Display Grid */}
                             <div className="grid grid-cols-3 items-center gap-1.5 sm:gap-3 text-center mb-6">
-                              {/* Team A Info */}
+                              {/* Team A — left */}
                               <div className="space-y-2 w-full min-w-0 max-w-[88px] sm:max-w-[100px] md:max-w-[140px] justify-self-center flex flex-col items-center">
-                                {entryAvatarUrl(match.teamA) ? (
+                                {resolveTeamLogo(match.teamA, activeCategory) ? (
                                   <img
-                                    src={entryAvatarUrl(match.teamA)}
+                                    src={resolveTeamLogo(match.teamA, activeCategory)}
                                     alt={match.teamA.name}
                                     className="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-cover shadow-sm border border-white"
                                   />
@@ -1455,19 +1556,53 @@ export default function TournamentDashboard() {
                                 <span className="text-[10px] sm:text-xs font-bold text-deep-forest uppercase tracking-wide line-clamp-2 text-center h-8 flex items-center justify-center leading-tight">
                                   {match.teamA.name}
                                 </span>
-                              </div>
-
-                              {/* Big Digital Scores */}
-                              {isCricket ? (
-                                <div className="flex flex-col items-center justify-center gap-1 text-center">
-                                  <span className="text-sm sm:text-lg font-mono font-bold text-white bg-[#0a331f] border border-black px-2 py-1 rounded-lg shadow">
+                                {isCricket && (
+                                  <span className="text-sm sm:text-lg font-mono font-bold text-white bg-[#0a331f] border border-black px-2.5 py-1.5 rounded-xl shadow tabular-nums">
                                     {match.scoreA}/{match.wicketsA ?? 0}
                                   </span>
-                                  <span className="text-[9px] font-mono text-slate-400">vs</span>
-                                  <span className="text-sm sm:text-lg font-mono font-bold text-white bg-[#0a331f] border border-black px-2 py-1 rounded-lg shadow">
-                                    {match.scoreB}/{match.wicketsB ?? 0}
+                                )}
+                              </div>
+
+                              {/* Center scores — set sports show live rally points when LIVE */}
+                              {isCricket ? (
+                                <div className="flex flex-col items-center justify-center gap-1 text-center">
+                                  <span className="text-[10px] font-mono font-bold text-slate-400 uppercase tracking-widest">
+                                    vs
                                   </span>
                                 </div>
+                              ) : isSetBased ? (
+                                (() => {
+                                  const cur =
+                                    (match.matchSets || []).find(
+                                      (s) => s.setNumber === (match.currentSet || 1)
+                                    ) || { scoreA: 0, scoreB: 0 };
+                                  const live = match.status === "LIVE";
+                                  const a = live ? cur.scoreA : match.scoreA;
+                                  const b = live ? cur.scoreB : match.scoreB;
+                                  const unit =
+                                    String(activeCategory?.sport || "").toUpperCase() ===
+                                    "BADMINTON"
+                                      ? "Games"
+                                      : "Sets";
+                                  return (
+                                    <div className="flex flex-col items-center justify-center gap-1">
+                                      <div className="flex items-center justify-center gap-1 sm:gap-2">
+                                        <span className="text-xl sm:text-2xl font-mono font-bold text-white bg-[#0a331f] border border-black px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl shadow min-w-[36px] sm:min-w-[44px]">
+                                          {a}
+                                        </span>
+                                        <span className="text-slate-400 font-bold font-mono text-sm sm:text-lg">:</span>
+                                        <span className="text-xl sm:text-2xl font-mono font-bold text-white bg-[#0a331f] border border-black px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl shadow min-w-[36px] sm:min-w-[44px]">
+                                          {b}
+                                        </span>
+                                      </div>
+                                      {live && (
+                                        <span className="text-[9px] font-mono text-deep-forest/45">
+                                          {unit} {match.scoreA}–{match.scoreB}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })()
                               ) : (
                                 <div className="flex items-center justify-center gap-1 sm:gap-2">
                                   <span className="text-xl sm:text-2xl font-mono font-bold text-white bg-[#0a331f] border border-black px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl shadow min-w-[36px] sm:min-w-[44px]">
@@ -1480,11 +1615,11 @@ export default function TournamentDashboard() {
                                 </div>
                               )}
 
-                              {/* Team B Info */}
+                              {/* Team B — right */}
                               <div className="space-y-2 w-full min-w-0 max-w-[88px] sm:max-w-[100px] md:max-w-[140px] justify-self-center flex flex-col items-center">
-                                {entryAvatarUrl(match.teamB) ? (
+                                {resolveTeamLogo(match.teamB, activeCategory) ? (
                                   <img
-                                    src={entryAvatarUrl(match.teamB)}
+                                    src={resolveTeamLogo(match.teamB, activeCategory)}
                                     alt={match.teamB.name}
                                     className="w-10 h-10 sm:w-11 sm:h-11 rounded-full object-cover shadow-sm border border-white"
                                   />
@@ -1499,6 +1634,11 @@ export default function TournamentDashboard() {
                                 <span className="text-[10px] sm:text-xs font-bold text-deep-forest uppercase tracking-wide line-clamp-2 text-center h-8 flex items-center justify-center leading-tight">
                                   {match.teamB.name}
                                 </span>
+                                {isCricket && (
+                                  <span className="text-sm sm:text-lg font-mono font-bold text-white bg-[#0a331f] border border-black px-2.5 py-1.5 rounded-xl shadow tabular-nums">
+                                    {match.scoreB}/{match.wicketsB ?? 0}
+                                  </span>
+                                )}
                               </div>
                             </div>
 
@@ -1827,7 +1967,7 @@ export default function TournamentDashboard() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {categoryTeams.filter(t => !isPlaceholderTeam(t.name)).map((team) => {
                     const isEditing = editingTeamId === team.id;
-                    const avatarUrl = entryAvatarUrl(team);
+                    const avatarUrl = resolveTeamLogo(team, activeCategory);
                     const singlesPlayer = isSingles ? team.players?.[0] : null;
                     const displayName = singlesPlayer?.name || team.name;
                     return (
@@ -2300,9 +2440,9 @@ export default function TournamentDashboard() {
                   <div className="flex flex-wrap gap-2 pt-2">
                     {categoryTeams.filter(t => !isPlaceholderTeam(t.name)).map(team => (
                       <span key={team.id} className="text-xs font-mono bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-deep-forest flex items-center gap-2 shadow-sm">
-                        {entryAvatarUrl(team) ? (
+                        {resolveTeamLogo(team, activeCategory) ? (
                           <img
-                            src={entryAvatarUrl(team)}
+                            src={resolveTeamLogo(team, activeCategory)}
                             alt=""
                             className="w-5 h-5 rounded-full object-cover border border-slate-200 shrink-0 bg-white"
                           />
@@ -2378,7 +2518,12 @@ export default function TournamentDashboard() {
             {schedulerMode === "manual" && (
               <form onSubmit={saveManualSchedule} className="space-y-6 max-w-3xl">
                 <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center">
-                  <h3 className="text-xs font-bold text-deep-forest/60 uppercase tracking-widest font-mono">Manual Round Planner</h3>
+                  <div>
+                    <h3 className="text-xs font-bold text-deep-forest/60 uppercase tracking-widest font-mono">Manual Round Planner</h3>
+                    <p className="text-[10px] font-mono text-deep-forest/45 mt-1">
+                      Pick clubs — or TBD slots (1st–4th placed, winner of an earlier match) for semis and finals. TBD slots fill in automatically from results.
+                    </p>
+                  </div>
                   <div className="flex flex-wrap gap-3 sm:gap-4 items-center">
                     {categoryRounds && categoryRounds.length > 0 && (
                       <button
@@ -2452,11 +2597,18 @@ export default function TournamentDashboard() {
                                       ? "-- Choose pair --"
                                       : "-- Choose Home Club --"}
                                 </option>
-                                {categoryTeams
-                                  .filter((t) => !isPlaceholderTeam(t.name))
-                                  .map((t) => (
-                                  <option key={t.id} value={t.id}>{t.name}</option>
-                                ))}
+                                <optgroup label="Clubs">
+                                  {categoryTeams
+                                    .filter((t) => !isPlaceholderTeam(t.name))
+                                    .map((t) => (
+                                    <option key={t.id} value={t.id}>{t.name}</option>
+                                  ))}
+                                </optgroup>
+                                <optgroup label="TBD / Placeholders">
+                                  {manualPlaceholderOptions(rIndex).map((p) => (
+                                    <option key={p.value} value={p.value}>{p.label}</option>
+                                  ))}
+                                </optgroup>
                               </select>
 
                               <span className="text-slate-400 font-mono text-xs font-bold my-1 sm:my-0">VS</span>
@@ -2475,13 +2627,34 @@ export default function TournamentDashboard() {
                                       ? "-- Choose pair --"
                                       : "-- Choose Away Club --"}
                                 </option>
-                                {categoryTeams
-                                  .filter((t) => !isPlaceholderTeam(t.name))
-                                  .map((t) => (
-                                  <option key={t.id} value={t.id}>{t.name}</option>
-                                ))}
+                                <optgroup label="Clubs">
+                                  {categoryTeams
+                                    .filter((t) => !isPlaceholderTeam(t.name))
+                                    .map((t) => (
+                                    <option key={t.id} value={t.id}>{t.name}</option>
+                                  ))}
+                                </optgroup>
+                                <optgroup label="TBD / Placeholders">
+                                  {manualPlaceholderOptions(rIndex).map((p) => (
+                                    <option key={p.value} value={p.value}>{p.label}</option>
+                                  ))}
+                                </optgroup>
                               </select>
                             </div>
+
+                            {/* Optional planned start time — e.g. Final at 5:00 PM */}
+                            <label className="flex items-center gap-1.5 w-full md:w-auto shrink-0">
+                              <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <input
+                                type="datetime-local"
+                                value={match.scheduledAt || ""}
+                                onChange={(e) =>
+                                  updateManualMatchField(rIndex, mIndex, "scheduledAt", e.target.value)
+                                }
+                                title="Match start time (optional)"
+                                className="w-full md:w-auto bg-white border border-slate-200 hover:border-slate-350 focus:border-mustard-gold rounded-xl px-2.5 py-2 text-[11px] font-mono text-deep-forest outline-none transition-all shadow-sm"
+                              />
+                            </label>
 
                             {round.matches.length > 1 && (
                               <button
@@ -2598,9 +2771,9 @@ export default function TournamentDashboard() {
                             <tr key={t.id} className="bg-[#fcf7ed] hover:bg-amber-50/40 transition-colors">
                               <td className="py-3 px-4 text-center font-bold text-xs">{idx + 1}</td>
                               <td className="py-3 px-4 font-bold font-sans flex items-center gap-3 text-sm text-[#0a331f]">
-                                {entryAvatarUrl(t) ? (
+                                {resolveTeamLogo(t, activeCategory) ? (
                                   <img
-                                    src={entryAvatarUrl(t)}
+                                    src={resolveTeamLogo(t, activeCategory)}
                                     alt=""
                                     className="w-7 h-7 rounded-full object-cover border border-white shadow-sm shrink-0 bg-white"
                                   />
@@ -2791,6 +2964,44 @@ export default function TournamentDashboard() {
                           <td className="py-3 px-4 font-sans font-bold">{p.name}</td>
                           <td className="py-3 px-4 uppercase">{p.teamName}</td>
                           <td className="py-3 px-4 text-center font-bold">{p.wickets}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+            <div>
+              <h3 className="text-xs font-bold text-deep-forest/65 uppercase tracking-widest font-mono mb-4">
+                Best fielders
+              </h3>
+              <p className="text-[10px] font-mono text-deep-forest/45 -mt-2 mb-4">
+                Catches, run-outs & stumpings · plus match Best Fielder awards
+              </p>
+              {(cricketLeaders.bestFielders || []).length === 0 ? (
+                <div className="text-center py-12 bg-white border-2 border-dashed border-mustard-gold rounded-2xl text-xs font-mono text-slate-400">
+                  No fielding dismissals recorded yet
+                </div>
+              ) : (
+                <div className="bg-white border-2 border-dashed border-mustard-gold rounded-2xl overflow-hidden">
+                  <table className="w-full text-xs font-mono">
+                    <thead>
+                      <tr className="bg-[#082e1c] text-[10px] text-white uppercase">
+                        <th className="py-3 px-4">#</th>
+                        <th className="py-3 px-4 text-left">Player</th>
+                        <th className="py-3 px-4 text-left">Club</th>
+                        <th className="py-3 px-4 text-center">Field</th>
+                        <th className="py-3 px-4 text-center">Awards</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cricketLeaders.bestFielders.map((p, idx) => (
+                        <tr key={p.id} className="bg-[#fcf7ed] border-t border-[#faf6ee]">
+                          <td className="py-3 px-4 text-center font-bold">{idx + 1}</td>
+                          <td className="py-3 px-4 font-sans font-bold">{p.name}</td>
+                          <td className="py-3 px-4 uppercase">{p.teamName}</td>
+                          <td className="py-3 px-4 text-center font-bold">{p.dismissals}</td>
+                          <td className="py-3 px-4 text-center font-bold">{p.awards}</td>
                         </tr>
                       ))}
                     </tbody>

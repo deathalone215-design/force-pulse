@@ -5,6 +5,7 @@ import {
   MEDIA_BUCKET,
   publicMediaUrl,
 } from "@/lib/supabaseAdmin";
+import { requireAuth } from "@/lib/accessControl";
 
 export const runtime = "nodejs";
 
@@ -13,6 +14,9 @@ function randomId() {
 }
 
 export async function POST(request) {
+  const gate = await requireAuth(request);
+  if (gate.error) return gate.error;
+
   try {
     const form = await request.formData();
     const file = form.get("file");

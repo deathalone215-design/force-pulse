@@ -21,6 +21,7 @@ import {
   resolveExtraMinutes,
   resolveFullTimeMinutes,
 } from "@/lib/footballClock";
+import { requireMatchAccess } from "@/lib/accessControl";
 
 function parseElapsedSeconds(body) {
   if (body.elapsedSeconds != null) {
@@ -47,8 +48,11 @@ const PERIOD_ACTIONS = new Set([
 ]);
 
 export async function POST(request, { params }) {
+  const { id } = await params;
+  const gate = await requireMatchAccess(request, id);
+  if (gate.error) return gate.error;
+
   try {
-    const { id } = await params;
     const body = await request.json();
     const {
       status,

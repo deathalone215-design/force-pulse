@@ -8,10 +8,14 @@ import {
   parseExpectedVersion,
   parseLockToken,
 } from "@/lib/matchCas";
+import { requireMatchAccess } from "@/lib/accessControl";
 
 export async function POST(request, { params }) {
+  const { id: matchId } = await params;
+  const gate = await requireMatchAccess(request, matchId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: matchId } = await params;
     const body = await request.json();
     const { strikerId, nonStrikerId, bowlerId } = body;
     const expectedVersion = parseExpectedVersion(body);

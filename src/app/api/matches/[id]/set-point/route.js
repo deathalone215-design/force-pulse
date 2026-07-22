@@ -12,6 +12,7 @@ import {
   parseExpectedVersion,
   parseLockToken,
 } from "@/lib/matchCas";
+import { requireMatchAccess } from "@/lib/accessControl";
 
 async function getMatchWithContext(matchId) {
   const match = await prisma.match.findUnique({
@@ -21,7 +22,16 @@ async function getMatchWithContext(matchId) {
       round: {
         include: {
           category: {
-            select: { id: true, sport: true, oversPerInnings: true },
+            select: {
+              id: true,
+              sport: true,
+              oversPerInnings: true,
+              pointsPerSet: true,
+              setsToWin: true,
+              maxSets: true,
+              lastSetPoints: true,
+              pointCap: true,
+            },
           },
         },
       },
@@ -31,8 +41,11 @@ async function getMatchWithContext(matchId) {
 }
 
 export async function GET(request, { params }) {
+  const { id: matchId } = await params;
+  const gate = await requireMatchAccess(request, matchId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: matchId } = await params;
     const match = await getMatchWithContext(matchId);
     if (!match) {
       return NextResponse.json({ error: "Match not found" }, { status: 404 });
@@ -45,8 +58,11 @@ export async function GET(request, { params }) {
 }
 
 export async function POST(request, { params }) {
+  const { id: matchId } = await params;
+  const gate = await requireMatchAccess(request, matchId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: matchId } = await params;
     const body = await request.json();
     const { team } = body;
     const expectedVersion = parseExpectedVersion(body);
@@ -66,7 +82,7 @@ export async function POST(request, { params }) {
     }
 
     const sport = match.round.category.sport;
-    const config = getConfig(sport);
+    const config = getConfig(sport, match.round.category);
     if (!config) {
       return NextResponse.json({ error: "Not a set-based sport" }, { status: 400 });
     }
@@ -106,6 +122,7 @@ export async function POST(request, { params }) {
 
         await casUpdateMatch(tx, matchId, {
           expectedVersion,
+          include: { matchSets: { orderBy: { setNumber: "asc" } } },
           data: {
             scoreA: newSetsWonA,
             scoreB: newSetsWonB,
@@ -117,6 +134,7 @@ export async function POST(request, { params }) {
         // Touch version even when only set score changes
         await casUpdateMatch(tx, matchId, {
           expectedVersion,
+          include: { matchSets: { orderBy: { setNumber: "asc" } } },
           data: {},
         });
       }
@@ -133,8 +151,11 @@ export async function POST(request, { params }) {
 }
 
 export async function DELETE(request, { params }) {
+  const { id: matchId } = await params;
+  const gate = await requireMatchAccess(request, matchId);
+  if (gate.error) return gate.error;
+
   try {
-    const { id: matchId } = await params;
     const { searchParams } = new URL(request.url);
     const team = searchParams.get("team");
     let expectedVersion = searchParams.get("expectedVersion");
@@ -159,7 +180,7 @@ export async function DELETE(request, { params }) {
     assertWritableLock(match, lockToken);
 
     const sport = match.round.category.sport;
-    const config = getConfig(sport);
+    const config = getConfig(sport, match.round.category);
     if (!config) {
       return NextResponse.json({ error: "Not a set-based sport" }, { status: 400 });
     }
@@ -173,16 +194,27 @@ export async function DELETE(request, { params }) {
         if (prevSet) {
           await prisma.$transaction(async (tx) => {
             const wasWonByA = prevSet.winnerId === match.teamAId;
+            // Also remove the winning rally so score is playable again (e.g. 21-19 → 20-19)
+            const undoA = wasWonByA
+              ? Math.max(0, prevSet.scoreA - 1)
+              : prevSet.scoreA;
+            const undoB = !wasWonByA && prevSet.winnerId
+              ? Math.max(0, prevSet.scoreB - 1)
+              : prevSet.scoreB;
             await tx.matchSet.update({
               where: { id: prevSet.id },
-              data: { winnerId: null },
+              data: {
+                winnerId: null,
+                scoreA: undoA,
+                scoreB: undoB,
+              },
             });
             await casUpdateMatch(tx, matchId, {
               expectedVersion,
               data: {
                 currentSet: currentSetNum - 1,
-                scoreA: match.scoreA - (wasWonByA ? 1 : 0),
-                scoreB: match.scoreB - (wasWonByA ? 0 : 1),
+                scoreA: Math.max(0, match.scoreA - (wasWonByA ? 1 : 0)),
+                scoreB: Math.max(0, match.scoreB - (wasWonByA ? 0 : 1)),
                 status: "LIVE",
               },
             });
