@@ -49,6 +49,26 @@ function toDateInputValue(date) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+/** Keep "" while typing so multi-digit edits don't snap back to the default. */
+function numberFieldValue(stored, fallback) {
+  if (stored === "") return "";
+  if (stored == null) return fallback;
+  return stored;
+}
+
+function parseNumberField(raw) {
+  if (raw === "") return "";
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : "";
+}
+
+function finalizeNumberField(stored, { min, max, fallback }) {
+  const n = parseInt(stored, 10);
+  if (!Number.isFinite(n) || n < min) return fallback;
+  if (n > max) return max;
+  return n;
+}
+
 function teamCount(tournament) {
   if (!tournament?.categories) return 0;
   return tournament.categories.reduce(
@@ -270,14 +290,39 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
                       type="number"
                       min={1}
                       max={99}
-                      value={cat.pointsPerSet || defaultSetScoring(cat.sport)?.pointsPerSet || 21}
+                      inputMode="numeric"
+                      value={numberFieldValue(
+                        cat.pointsPerSet,
+                        defaultSetScoring(cat.sport)?.pointsPerSet || 21
+                      )}
                       onChange={(e) => {
-                        const pointsPerSet = parseInt(e.target.value, 10) || 21;
+                        const pointsPerSet = parseNumberField(e.target.value);
                         updateRow(cat, {
                           pointsPerSet,
                           lastSetPoints:
                             cat.sport === "VOLLEYBALL"
-                              ? cat.lastSetPoints || 15
+                              ? cat.lastSetPoints === ""
+                                ? ""
+                                : cat.lastSetPoints || 15
+                              : pointsPerSet,
+                        });
+                      }}
+                      onBlur={() => {
+                        const fallback =
+                          defaultSetScoring(cat.sport)?.pointsPerSet || 21;
+                        const pointsPerSet = finalizeNumberField(
+                          cat.pointsPerSet,
+                          { min: 1, max: 99, fallback }
+                        );
+                        updateRow(cat, {
+                          pointsPerSet,
+                          lastSetPoints:
+                            cat.sport === "VOLLEYBALL"
+                              ? finalizeNumberField(cat.lastSetPoints, {
+                                  min: 1,
+                                  max: 99,
+                                  fallback: 15,
+                                })
                               : pointsPerSet,
                         });
                       }}
@@ -290,9 +335,29 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
                       type="number"
                       min={1}
                       max={5}
-                      value={cat.setsToWin || defaultSetScoring(cat.sport)?.setsToWin || 2}
+                      inputMode="numeric"
+                      value={numberFieldValue(
+                        cat.setsToWin,
+                        defaultSetScoring(cat.sport)?.setsToWin || 2
+                      )}
                       onChange={(e) => {
-                        const setsToWin = parseInt(e.target.value, 10) || 2;
+                        const setsToWin = parseNumberField(e.target.value);
+                        updateRow(cat, {
+                          setsToWin,
+                          maxSets:
+                            setsToWin === ""
+                              ? cat.maxSets
+                              : Math.max(setsToWin * 2 - 1, setsToWin),
+                        });
+                      }}
+                      onBlur={() => {
+                        const fallback =
+                          defaultSetScoring(cat.sport)?.setsToWin || 2;
+                        const setsToWin = finalizeNumberField(cat.setsToWin, {
+                          min: 1,
+                          max: 5,
+                          fallback,
+                        });
                         updateRow(cat, {
                           setsToWin,
                           maxSets: Math.max(setsToWin * 2 - 1, setsToWin),
@@ -308,10 +373,19 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
                         type="number"
                         min={1}
                         max={99}
-                        value={cat.lastSetPoints || 15}
+                        inputMode="numeric"
+                        value={numberFieldValue(cat.lastSetPoints, 15)}
                         onChange={(e) =>
                           updateRow(cat, {
-                            lastSetPoints: parseInt(e.target.value, 10) || 15,
+                            lastSetPoints: parseNumberField(e.target.value),
+                          })
+                        }
+                        onBlur={() =>
+                          updateRow(cat, {
+                            lastSetPoints: finalizeNumberField(
+                              cat.lastSetPoints,
+                              { min: 1, max: 99, fallback: 15 }
+                            ),
                           })
                         }
                         className="w-12 bg-white border border-slate-200 rounded-lg px-1.5 py-1 text-[10px] font-mono outline-none"
@@ -325,13 +399,22 @@ function SportCategoryEditor({ selected, onChange, idPrefix = "cat" }) {
                         type="number"
                         min={1}
                         max={99}
-                        value={cat.pointCap ?? 30}
-                        onChange={(e) => {
-                          const n = parseInt(e.target.value, 10);
+                        inputMode="numeric"
+                        value={numberFieldValue(cat.pointCap, 30)}
+                        onChange={(e) =>
                           updateRow(cat, {
-                            pointCap: Number.isFinite(n) && n > 0 ? n : 30,
-                          });
-                        }}
+                            pointCap: parseNumberField(e.target.value),
+                          })
+                        }
+                        onBlur={() =>
+                          updateRow(cat, {
+                            pointCap: finalizeNumberField(cat.pointCap, {
+                              min: 1,
+                              max: 99,
+                              fallback: 30,
+                            }),
+                          })
+                        }
                         className="w-12 bg-white border border-slate-200 rounded-lg px-1.5 py-1 text-[10px] font-mono outline-none"
                       />
                     </label>

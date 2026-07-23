@@ -23,8 +23,6 @@ import {
   calculateCricketLeaders,
   calculateCricketStandings,
   inningsTotals,
-  computeBatterStats,
-  computeBowlerStats,
   computeCurrentRunRate,
   computeRequiredRunRate,
   computeProjectedScore,
@@ -35,6 +33,8 @@ import {
   ballDisplayColor,
   oversToMaxBalls,
   ballsRemaining,
+  buildInningsBattingCard,
+  buildInningsBowlingCard,
 } from "@/lib/cricket";
 import {
   isSetBasedSport,
@@ -365,6 +365,181 @@ function BallDot({ ball, size = "md" }) {
   );
 }
 
+/** Full batting + bowling tables (not-out first; current bowler first). */
+function CricketInningsScorecard({
+  balls,
+  innings,
+  strikerId = null,
+  nonStrikerId = null,
+  currentBowlerId = null,
+  findPlayer,
+  title = null,
+}) {
+  const battingRows = buildInningsBattingCard({
+    balls,
+    innings,
+    strikerId,
+    nonStrikerId,
+    findPlayer,
+  });
+  const bowlingRows = buildInningsBowlingCard({
+    balls,
+    innings,
+    currentBowlerId,
+    findPlayer,
+  });
+
+  if (battingRows.length === 0 && bowlingRows.length === 0) return null;
+
+  return (
+    <div className="border-t border-slate-100">
+      {title ? (
+        <p className="px-3.5 py-2 text-[9px] font-mono font-bold uppercase tracking-widest text-deep-forest/45 bg-cream-bg/50">
+          {title}
+        </p>
+      ) : null}
+
+      {battingRows.length > 0 && (
+        <div className="overflow-x-auto border-b border-slate-100">
+          <div className="min-w-[360px]">
+            <div className="grid grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_2rem_2rem_1.6rem_1.6rem_2.6rem] gap-1 px-3.5 py-1.5 bg-slate-50 text-[8px] font-mono uppercase tracking-wider text-slate-400 font-bold">
+              <span>Batter</span>
+              <span>How out</span>
+              <span className="text-right">R</span>
+              <span className="text-right">B</span>
+              <span className="text-right">4s</span>
+              <span className="text-right">6s</span>
+              <span className="text-right">SR</span>
+            </div>
+            {battingRows.map((row) => {
+              const player = row.player;
+              const name = player?.name || "Player";
+              return (
+                <div
+                  key={row.playerId}
+                  className={`grid grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)_2rem_2rem_1.6rem_1.6rem_2.6rem] gap-1 px-3.5 py-2 items-center ${
+                    row.onStrike ? "bg-[#0d472c]/[0.06]" : "bg-white"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span
+                      className={`w-5 h-5 rounded text-[8px] font-mono font-bold flex items-center justify-center shrink-0 ${
+                        row.onStrike
+                          ? "bg-mustard-gold text-deep-forest"
+                          : row.notOut
+                            ? "bg-slate-100 text-slate-500"
+                            : "bg-slate-50 text-slate-400"
+                      }`}
+                    >
+                      {player?.shirtNumber ?? "·"}
+                    </span>
+                    <span
+                      className={`text-[11px] sm:text-[12px] font-semibold truncate ${
+                        row.notOut ? "text-deep-forest" : "text-slate-600"
+                      }`}
+                    >
+                      {name}
+                      {row.onStrike ? (
+                        <span className="text-mustard-gold-hover ml-0.5">*</span>
+                      ) : null}
+                    </span>
+                  </div>
+                  <span
+                    className={`text-[9px] sm:text-[10px] font-mono truncate ${
+                      row.notOut ? "text-emerald-700 font-bold" : "text-slate-500"
+                    }`}
+                    title={row.dismissalText}
+                  >
+                    {row.dismissalText}
+                  </span>
+                  <span className="text-right text-sm font-mono font-bold text-deep-forest tabular-nums">
+                    {row.stats?.runs ?? 0}
+                  </span>
+                  <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
+                    {row.stats?.ballsFaced ?? 0}
+                  </span>
+                  <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
+                    {row.stats?.fours ?? 0}
+                  </span>
+                  <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
+                    {row.stats?.sixes ?? 0}
+                  </span>
+                  <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
+                    {row.stats?.sr ?? "—"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {bowlingRows.length > 0 && (
+        <div className="overflow-x-auto">
+          <div className="min-w-[320px]">
+            <div className="grid grid-cols-[1fr_2.5rem_1.8rem_2.2rem_1.8rem_3rem] gap-1 px-3.5 py-1.5 bg-slate-50 text-[8px] font-mono uppercase tracking-wider text-slate-400 font-bold">
+              <span>Bowler</span>
+              <span className="text-right">O</span>
+              <span className="text-right">M</span>
+              <span className="text-right">R</span>
+              <span className="text-right">W</span>
+              <span className="text-right">Econ</span>
+            </div>
+            {bowlingRows.map((row) => {
+              const player = row.player;
+              return (
+                <div
+                  key={row.playerId}
+                  className={`grid grid-cols-[1fr_2.5rem_1.8rem_2.2rem_1.8rem_3rem] gap-1 px-3.5 py-2 items-center ${
+                    row.isCurrent ? "bg-[#7c3aed]/[0.06]" : "bg-white"
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className={`w-5 h-5 rounded text-[8px] font-mono font-bold flex items-center justify-center shrink-0 ${
+                        row.isCurrent
+                          ? "bg-[#7c3aed]/15 text-[#6d28d9]"
+                          : "bg-slate-100 text-slate-500"
+                      }`}
+                    >
+                      {player?.shirtNumber ?? "·"}
+                    </span>
+                    <span
+                      className={`text-[11px] sm:text-[12px] font-semibold truncate ${
+                        row.isCurrent ? "text-deep-forest" : "text-slate-700"
+                      }`}
+                    >
+                      {player?.name || "Bowler"}
+                      {row.isCurrent ? (
+                        <span className="text-[#7c3aed] ml-0.5">*</span>
+                      ) : null}
+                    </span>
+                  </div>
+                  <span className="text-right text-[11px] font-mono font-bold text-deep-forest tabular-nums">
+                    {row.stats?.oversStr ?? "0"}
+                  </span>
+                  <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
+                    {row.stats?.maidens ?? 0}
+                  </span>
+                  <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
+                    {row.stats?.runs ?? 0}
+                  </span>
+                  <span className="text-right text-[11px] font-mono font-bold text-deep-forest tabular-nums">
+                    {row.stats?.wickets ?? 0}
+                  </span>
+                  <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
+                    {row.stats?.economy ?? "—"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CricketLiveCard({ match, category }) {
   const allBalls = match.cricketBalls || [];
   const oversLimit = match.oversLimit || 20;
@@ -380,7 +555,6 @@ function CricketLiveCard({ match, category }) {
   const battingTeam = batting === match.teamAId ? match.teamA : match.teamB;
   const bowlingTeam = batting === match.teamAId ? match.teamB : match.teamA;
 
-  const inningsBalls = allBalls.filter((b) => b.innings === match.currentInnings);
   const tot = batting ? inningsTotals(match, batting) : null;
 
   const firstInningsTeam = allBalls.find((b) => b.innings === 1)?.battingTeamId;
@@ -411,15 +585,6 @@ function CricketLiveCard({ match, category }) {
         )
       : null;
 
-  const strikerStats = match.strikerId
-    ? computeBatterStats(inningsBalls, match.strikerId)
-    : null;
-  const nonStrikerStats = match.nonStrikerId
-    ? computeBatterStats(inningsBalls, match.nonStrikerId)
-    : null;
-  const bowlerStats = match.bowlerId
-    ? computeBowlerStats(inningsBalls, match.bowlerId)
-    : null;
   const partnership =
     match.strikerId && match.nonStrikerId
       ? computePartnership(
@@ -436,15 +601,17 @@ function CricketLiveCard({ match, category }) {
   const lastOvers = getLastNOversRuns(allBalls, match.currentInnings, 5);
   const overRuns = currentOverBalls.reduce((s, b) => s + (b.runsTotal || 0), 0);
 
-  const strikerPlayer = findPlayer(match.strikerId);
-  const nonStrikerPlayer = findPlayer(match.nonStrikerId);
-  const bowlerPlayer = findPlayer(match.bowlerId);
-
   const isLive = match.status === "LIVE";
   const isCompleted = match.status === "COMPLETED";
   const oversNow = ballsToOvers(tot?.legalBalls ?? 0);
 
   if (isCompleted) {
+    const innings1TeamId = firstInningsTeam || match.teamAId;
+    const innings2TeamId =
+      innings1TeamId === match.teamAId ? match.teamBId : match.teamAId;
+    const teamName = (id) =>
+      id === match.teamAId ? match.teamA?.name : match.teamB?.name;
+
     return (
       <div className="rounded-2xl overflow-hidden border border-slate-200 bg-white shadow-sm">
         <div className="bg-[#0a331f] px-3 py-2 flex items-center justify-between">
@@ -522,6 +689,22 @@ function CricketLiveCard({ match, category }) {
               </p>
             )}
           </div>
+        )}
+        {allBalls.some((b) => b.innings === 1) && (
+          <CricketInningsScorecard
+            balls={allBalls}
+            innings={1}
+            findPlayer={findPlayer}
+            title={`1st innings · ${teamName(innings1TeamId) || "Batting"}`}
+          />
+        )}
+        {allBalls.some((b) => b.innings === 2) && (
+          <CricketInningsScorecard
+            balls={allBalls}
+            innings={2}
+            findPlayer={findPlayer}
+            title={`2nd innings · ${teamName(innings2TeamId) || "Batting"}`}
+          />
         )}
       </div>
     );
@@ -678,116 +861,21 @@ function CricketLiveCard({ match, category }) {
         </div>
       )}
 
-      {/* Batters table */}
-      {isLive && (strikerPlayer || nonStrikerPlayer) && (
-        <div className="border-b border-slate-100 overflow-x-auto">
-          <div className="min-w-[320px]">
-          <div className="grid grid-cols-[1fr_2.2rem_2.2rem_1.8rem_1.8rem_3rem] gap-1 px-3.5 py-1.5 bg-slate-50 text-[8px] font-mono uppercase tracking-wider text-slate-400 font-bold">
-            <span>Batter</span>
-            <span className="text-right">R</span>
-            <span className="text-right">B</span>
-            <span className="text-right">4s</span>
-            <span className="text-right">6s</span>
-            <span className="text-right">SR</span>
-          </div>
-          {[
-            { player: strikerPlayer, stats: strikerStats, onStrike: true },
-            { player: nonStrikerPlayer, stats: nonStrikerStats, onStrike: false },
-          ]
-            .filter((x) => x.player)
-            .map(({ player, stats, onStrike }) => (
-              <div
-                key={player.id}
-                className={`grid grid-cols-[1fr_2.2rem_2.2rem_1.8rem_1.8rem_3rem] gap-1 px-3.5 py-2.5 items-center ${
-                  onStrike ? "bg-[#0d472c]/[0.06]" : "bg-white"
-                }`}
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span
-                    className={`w-5 h-5 rounded text-[8px] font-mono font-bold flex items-center justify-center shrink-0 ${
-                      onStrike
-                        ? "bg-mustard-gold text-deep-forest"
-                        : "bg-slate-100 text-slate-500"
-                    }`}
-                  >
-                    {player.shirtNumber ?? "·"}
-                  </span>
-                  <span
-                    className={`text-[12px] font-semibold truncate ${
-                      onStrike ? "text-deep-forest" : "text-slate-700"
-                    }`}
-                  >
-                    {player.name}
-                    {onStrike ? (
-                      <span className="text-mustard-gold-hover ml-0.5">*</span>
-                    ) : null}
-                  </span>
-                </div>
-                <span className="text-right text-sm font-mono font-bold text-deep-forest tabular-nums">
-                  {stats?.runs ?? 0}
-                </span>
-                <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
-                  {stats?.ballsFaced ?? 0}
-                </span>
-                <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
-                  {stats?.fours ?? 0}
-                </span>
-                <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
-                  {stats?.sixes ?? 0}
-                </span>
-                <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
-                  {stats?.sr ?? "—"}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Bowler row */}
-      {isLive && bowlerPlayer && bowlerStats && (
-        <div className="border-b border-slate-100 overflow-x-auto">
-          <div className="min-w-[320px]">
-          <div className="grid grid-cols-[1fr_2.5rem_1.8rem_2.2rem_1.8rem_3rem] gap-1 px-3.5 py-1.5 bg-slate-50 text-[8px] font-mono uppercase tracking-wider text-slate-400 font-bold">
-            <span>Bowler</span>
-            <span className="text-right">O</span>
-            <span className="text-right">M</span>
-            <span className="text-right">R</span>
-            <span className="text-right">W</span>
-            <span className="text-right">Econ</span>
-          </div>
-          <div className="grid grid-cols-[1fr_2.5rem_1.8rem_2.2rem_1.8rem_3rem] gap-1 px-3.5 py-2.5 items-center">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="w-5 h-5 rounded bg-[#7c3aed]/15 text-[#6d28d9] text-[8px] font-mono font-bold flex items-center justify-center shrink-0">
-                {bowlerPlayer.shirtNumber ?? "·"}
-              </span>
-              <span className="text-[12px] font-semibold text-deep-forest truncate">
-                {bowlerPlayer.name}
-              </span>
-            </div>
-            <span className="text-right text-[11px] font-mono font-bold text-deep-forest tabular-nums">
-              {bowlerStats.oversStr}
-            </span>
-            <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
-              {bowlerStats.maidens}
-            </span>
-            <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
-              {bowlerStats.runs}
-            </span>
-            <span className="text-right text-[11px] font-mono font-bold text-deep-forest tabular-nums">
-              {bowlerStats.wickets}
-            </span>
-            <span className="text-right text-[11px] font-mono text-slate-500 tabular-nums">
-              {bowlerStats.economy}
-            </span>
-          </div>
-          </div>
-        </div>
+      {/* Full batting + bowling scorecard */}
+      {isLive && (
+        <CricketInningsScorecard
+          balls={allBalls}
+          innings={match.currentInnings}
+          strikerId={match.strikerId}
+          nonStrikerId={match.nonStrikerId}
+          currentBowlerId={match.bowlerId}
+          findPlayer={findPlayer}
+        />
       )}
 
       {/* Recent overs */}
       {isLive && lastOvers.length > 0 && (
-        <div className="px-3.5 py-2.5 flex items-center gap-2 flex-wrap bg-white">
+        <div className="px-3.5 py-2.5 flex items-center gap-2 flex-wrap bg-white border-t border-slate-100">
           <span className="text-[8px] font-mono uppercase tracking-widest text-slate-400 font-bold shrink-0">
             Recent
           </span>
@@ -829,6 +917,11 @@ function SetScoreBlock({ match, compact, sport = null }) {
   if (isLive) {
     return (
       <div className="text-center space-y-1">
+        {String(sport || "").toUpperCase() === "BADMINTON" ? (
+          <p className="text-[8px] font-mono uppercase tracking-wider text-deep-forest/40 font-bold">
+            Rally
+          </p>
+        ) : null}
         <div className="flex items-center justify-center gap-1">
           <span className={`font-mono font-bold text-white bg-[#0a331f] rounded-xl shadow border border-black inline-block ${compact ? "text-base px-2 py-1.5" : "text-xl sm:text-2xl px-3 py-2"}`}>
             {currentSet.scoreA}
@@ -1168,6 +1261,9 @@ function FootballLiveCard({ match, tournamentId = null, category = null }) {
 /** Volleyball / Badminton / Pickleball live board */
 function SetBasedLiveCard({ match, sport, category = null }) {
   const config = getConfig(sport, category) || SPORT_CONFIGS.VOLLEYBALL;
+  const isBadminton = String(sport || "").toUpperCase() === "BADMINTON";
+  const unit = isBadminton ? "Game" : "Set";
+  const units = isBadminton ? "Games" : "Sets";
   const isLive = match.status === "LIVE";
   const isCompleted = match.status === "COMPLETED";
   const sets = [...(match.matchSets || [])].sort(
@@ -1185,6 +1281,12 @@ function SetBasedLiveCard({ match, sport, category = null }) {
   const target = getSetTarget(currentSetNum, config);
   const teamA = match.teamA;
   const teamB = match.teamB;
+  const rallyTotal = (currentSet.scoreA || 0) + (currentSet.scoreB || 0);
+  // Progress toward game target (rally points), not share of total rallies
+  const towardTarget =
+    target > 0
+      ? Math.min(100, (Math.max(currentSet.scoreA, currentSet.scoreB) / target) * 100)
+      : 0;
 
   return (
     <div className="rounded-2xl overflow-hidden border border-[#0d472c]/25 bg-white shadow-md">
@@ -1227,7 +1329,8 @@ function SetBasedLiveCard({ match, sport, category = null }) {
             {isLive ? (
               <>
                 <p className="text-[8px] font-mono text-white/40 uppercase tracking-wider mb-0.5">
-                  {sport === "BADMINTON" ? "Game" : "Set"} {currentSetNum}
+                  {unit} {currentSetNum}
+                  {isBadminton ? " · Rally" : ""}
                 </p>
                 <div className="flex items-baseline justify-center gap-1.5 font-mono font-bold tabular-nums">
                   <span className="text-3xl sm:text-4xl text-mustard-gold">
@@ -1239,7 +1342,7 @@ function SetBasedLiveCard({ match, sport, category = null }) {
                   </span>
                 </div>
                 <p className="text-[9px] font-mono text-white/50 mt-1">
-                  {sport === "BADMINTON" ? "Games" : "Sets"}{" "}
+                  {units}{" "}
                   <span className="font-bold text-white">
                     {match.scoreA}–{match.scoreB}
                   </span>
@@ -1249,7 +1352,7 @@ function SetBasedLiveCard({ match, sport, category = null }) {
             ) : (
               <>
                 <p className="text-[8px] font-mono text-white/40 uppercase tracking-wider mb-0.5">
-                  {sport === "BADMINTON" ? "Games" : "Sets"}
+                  {units}
                 </p>
                 <div className="flex items-baseline justify-center gap-1.5 font-mono font-bold tabular-nums">
                   <span className="text-3xl sm:text-4xl text-mustard-gold">
@@ -1286,40 +1389,33 @@ function SetBasedLiveCard({ match, sport, category = null }) {
         </div>
       </div>
 
-      {/* Current set detail — only when not already shown as hero */}
+      {/* Rally rules + progress toward game target */}
       {isLive && (
         <div className="px-3.5 py-3 bg-[#f8faf8] border-b border-slate-100 text-center">
           <p className="text-[8px] font-mono uppercase tracking-widest text-slate-400 font-bold mb-1.5">
+            {isBadminton ? "Rally scoring · " : ""}
             Play to {target}
             {config.winByTwo ? " · win by 2" : ""}
             {config.pointCap ? ` · cap ${config.pointCap}` : ""}
           </p>
-          <div className="h-1.5 max-w-[200px] mx-auto bg-slate-200 rounded-full overflow-hidden flex">
+          <div className="h-1.5 max-w-[200px] mx-auto bg-slate-200 rounded-full overflow-hidden">
             <div
               className="h-full bg-[#0d472c] transition-all"
-              style={{
-                width: `${
-                  currentSet.scoreA + currentSet.scoreB === 0
-                    ? 50
-                    : (currentSet.scoreA /
-                        (currentSet.scoreA + currentSet.scoreB)) *
-                      100
-                }%`,
-              }}
+              style={{ width: `${towardTarget}%` }}
+              title={`${Math.max(currentSet.scoreA, currentSet.scoreB)} / ${target}${rallyTotal ? ` · ${rallyTotal} rallies` : ""}`}
             />
-            <div className="h-full bg-mustard-gold flex-1" />
           </div>
         </div>
       )}
 
-      {/* Set history */}
+      {/* Game / set history (each chip shows rally points for that game) */}
       <div className="px-3.5 py-3">
         <p className="text-[8px] font-mono uppercase tracking-widest text-slate-400 font-bold mb-2">
-          {sport === "BADMINTON" ? "Game scores" : "Set scores"}
+          {isBadminton ? "Game scores" : "Set scores"}
         </p>
         {sets.length === 0 ? (
           <p className="text-[10px] font-mono text-slate-400 text-center py-2">
-            {isLive ? "Set 1 starting…" : "No sets yet"}
+            {isLive ? `${unit} 1 starting…` : `No ${units.toLowerCase()} yet`}
           </p>
         ) : (
           <div className="flex flex-wrap gap-2 justify-center">
@@ -1338,7 +1434,7 @@ function SetBasedLiveCard({ match, sport, category = null }) {
                   }`}
                 >
                   <p className="text-[8px] font-mono uppercase text-slate-400 font-bold">
-                    Set {s.setNumber}
+                    {unit} {s.setNumber}
                   </p>
                   <p className="text-sm font-mono font-bold text-deep-forest tabular-nums mt-0.5">
                     {s.scoreA}–{s.scoreB}

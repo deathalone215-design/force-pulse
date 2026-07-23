@@ -130,6 +130,137 @@ export function ballDisplayColor(b) {
   return "bg-[#ecfdf5] text-[#065f46] border-[#6ee7b7]";
 }
 
+function playerDisplayName(player) {
+  if (!player?.name) return "—";
+  return String(player.name).trim() || "—";
+}
+
+/** Broadcast-style dismissal line, e.g. "c Fielder b Bowler" */
+export function formatDismissalText(ball, findPlayer) {
+  if (!ball?.isWicket) return "not out";
+  const type = String(ball.dismissalType || "OTHER").toUpperCase();
+  const bowler = ball.bowlerId ? playerDisplayName(findPlayer?.(ball.bowlerId)) : null;
+  const fielder = ball.fielderId
+    ? playerDisplayName(findPlayer?.(ball.fielderId))
+    : null;
+
+  switch (type) {
+    case "BOWLED":
+      return bowler ? `b ${bowler}` : "bowled";
+    case "CAUGHT":
+      if (fielder && bowler) return `c ${fielder} b ${bowler}`;
+      if (bowler) return `c & b ${bowler}`;
+      return "caught";
+    case "LBW":
+      return bowler ? `lbw b ${bowler}` : "lbw";
+    case "STUMPED":
+      if (fielder && bowler) return `st ${fielder} b ${bowler}`;
+      if (bowler) return `st b ${bowler}`;
+      return "stumped";
+    case "RUN_OUT":
+      return fielder ? `run out (${fielder})` : "run out";
+    case "HIT_WICKET":
+      return bowler ? `hit wicket b ${bowler}` : "hit wicket";
+    case "OBSTRUCTING":
+      return "obstructing the field";
+    default:
+      return type.replace(/_/g, " ").toLowerCase();
+  }
+}
+
+/**
+ * Batting scorecard for one innings.
+ * Not-out (crease) batters first, then dismissals in order.
+ */
+export function buildInningsBattingCard({
+  balls = [],
+  innings,
+  strikerId = null,
+  nonStrikerId = null,
+  findPlayer = () => null,
+}) {
+  const inningsBalls = balls.filter((b) => b.innings === innings);
+  const batterIds = new Set();
+  for (const b of inningsBalls) {
+    if (b.strikerId) batterIds.add(b.strikerId);
+    if (b.isWicket && b.dismissedPlayerId) batterIds.add(b.dismissedPlayerId);
+  }
+  if (strikerId) batterIds.add(strikerId);
+  if (nonStrikerId) batterIds.add(nonStrikerId);
+
+  const dismissalByPlayer = {};
+  inningsBalls.forEach((b, idx) => {
+    if (b.isWicket && b.dismissedPlayerId && !dismissalByPlayer[b.dismissedPlayerId]) {
+      dismissalByPlayer[b.dismissedPlayerId] = { ball: b, order: idx };
+    }
+  });
+
+  const rows = [...batterIds].map((id) => {
+    const dismissal = dismissalByPlayer[id] || null;
+    const isOut = !!dismissal;
+    return {
+      playerId: id,
+      player: findPlayer(id),
+      stats: computeBatterStats(inningsBalls, id),
+      isOut,
+      notOut: !isOut,
+      onStrike: id === strikerId,
+      dismissalText: isOut
+        ? formatDismissalText(dismissal.ball, findPlayer)
+        : "not out",
+      dismissalOrder: dismissal?.order ?? 9999,
+    };
+  });
+
+  rows.sort((a, b) => {
+    if (a.notOut !== b.notOut) return a.notOut ? -1 : 1;
+    if (a.notOut && b.notOut) {
+      if (a.onStrike !== b.onStrike) return a.onStrike ? -1 : 1;
+      if (a.playerId === nonStrikerId) return -1;
+      if (b.playerId === nonStrikerId) return 1;
+      return 0;
+    }
+    return a.dismissalOrder - b.dismissalOrder;
+  });
+
+  return rows;
+}
+
+/**
+ * Bowling scorecard for one innings.
+ * Current bowler first, then others in order of first over.
+ */
+export function buildInningsBowlingCard({
+  balls = [],
+  innings,
+  currentBowlerId = null,
+  findPlayer = () => null,
+}) {
+  const inningsBalls = balls.filter((b) => b.innings === innings);
+  const firstSeen = {};
+  inningsBalls.forEach((b, idx) => {
+    if (b.bowlerId && firstSeen[b.bowlerId] == null) firstSeen[b.bowlerId] = idx;
+  });
+  if (currentBowlerId && firstSeen[currentBowlerId] == null) {
+    firstSeen[currentBowlerId] = -1;
+  }
+
+  const rows = Object.keys(firstSeen).map((id) => ({
+    playerId: id,
+    player: findPlayer(id),
+    stats: computeBowlerStats(inningsBalls, id),
+    isCurrent: id === currentBowlerId,
+    order: firstSeen[id],
+  }));
+
+  rows.sort((a, b) => {
+    if (a.isCurrent !== b.isCurrent) return a.isCurrent ? -1 : 1;
+    return a.order - b.order;
+  });
+
+  return rows;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Legal balls → overs display string e.g. 18.3 */
